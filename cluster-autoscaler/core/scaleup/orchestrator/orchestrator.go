@@ -193,14 +193,17 @@ func (o *ScaleUpOrchestrator) ScaleUp(
 		mainCreatedNodeInfo, aErr := utils.GetNodeInfoFromTemplate(createNodeGroupResult.MainCreatedNodeGroup, daemonSets, o.taintConfig)
 		if aErr == nil {
 			nodeInfos[createNodeGroupResult.MainCreatedNodeGroup.Id()] = mainCreatedNodeInfo
+			schedulablePods[createNodeGroupResult.MainCreatedNodeGroup.Id()] = o.SchedulablePods(podEquivalenceGroups, createNodeGroupResult.MainCreatedNodeGroup, mainCreatedNodeInfo)
 		} else {
 			klog.Warningf("Cannot build node info for newly created main node group %v; balancing similar node groups may not work; err=%v", createNodeGroupResult.MainCreatedNodeGroup.Id(), aErr)
-			// Use node info based on expansion candidate but upadte Id which likely changed when node group was created.
-			nodeInfos[bestOption.NodeGroup.Id()] = nodeInfos[oldId]
+			// Use node info based on expansion candidate but update Id which likely changed when node group was created.
+			nodeInfos[createNodeGroupResult.MainCreatedNodeGroup.Id()] = nodeInfos[oldId]
+			schedulablePods[createNodeGroupResult.MainCreatedNodeGroup.Id()] = schedulablePods[oldId]
 		}
 
 		if oldId != createNodeGroupResult.MainCreatedNodeGroup.Id() {
 			delete(nodeInfos, oldId)
+			delete(schedulablePods, oldId)
 		}
 
 		for _, nodeGroup := range createNodeGroupResult.ExtraCreatedNodeGroups {
@@ -217,10 +220,10 @@ func (o *ScaleUpOrchestrator) ScaleUp(
 		// TODO(lukaszos) when pursuing scalability update this call with one which takes list of changed node groups so we do not
 		//                do extra API calls. (the call at the bottom of ScaleUp() could be also changed then)
 		o.clusterStateRegistry.Recalculate()
-
-		// Recompute similar node groups
-		bestOption.SimilarNodeGroups = o.ComputeSimilarNodeGroups(bestOption.NodeGroup, nodeInfos, schedulablePods, now)
 	}
+
+	// Recompute similar node groups in case they need to be updated
+	bestOption.SimilarNodeGroups = o.ComputeSimilarNodeGroups(bestOption.NodeGroup, nodeInfos, schedulablePods, now)
 
 	nodeInfo, found := nodeInfos[bestOption.NodeGroup.Id()]
 	if !found {
@@ -510,7 +513,7 @@ func (o *ScaleUpOrchestrator) UpcomingNodes(nodeInfos map[string]*schedulerframe
 
 // IsNodeGroupReadyToScaleUp returns nil if node group is ready to be scaled up, otherwise a reason is provided.
 func (o *ScaleUpOrchestrator) IsNodeGroupReadyToScaleUp(nodeGroup cloudprovider.NodeGroup, now time.Time) *SkippedReasons {
-	// Autoprovisioned node groups without nodes are created later so skip check for them.
+	// Non-existing node groups are created later so skip check for them.
 	if nodeGroup.Exist() && !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(nodeGroup, now) {
 		// Hack that depends on internals of IsNodeGroupSafeToScaleUp.
 		if !o.clusterStateRegistry.IsNodeGroupHealthy(nodeGroup.Id()) {
@@ -587,7 +590,8 @@ func (o *ScaleUpOrchestrator) ComputeSimilarNodeGroups(
 
 	var validSimilarNodeGroups []cloudprovider.NodeGroup
 	for _, ng := range similarNodeGroups {
-		if !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(ng, now) {
+		// Non-existing node groups are created later so skip check for them.
+		if ng.Exist() && !o.clusterStateRegistry.IsNodeGroupSafeToScaleUp(ng, now) {
 			klog.V(2).Infof("Ignoring node group %s when balancing: group is not ready for scaleup", ng.Id())
 		} else if similarSchedulablePods, found := schedulablePods[ng.Id()]; found && matchingSchedulablePods(groupSchedulablePods, similarSchedulablePods) {
 			validSimilarNodeGroups = append(validSimilarNodeGroups, ng)
