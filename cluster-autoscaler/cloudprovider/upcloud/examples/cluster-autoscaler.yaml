@@ -18,6 +18,7 @@ spec:
       serviceAccountName: cluster-autoscaler
       containers:
         - name: cluster-autoscaler
+          priorityClassName: system-cluster-critical
           image: ghcr.io/peknur/uks-ca:dev
           imagePullPolicy: "Always"
           resources:
