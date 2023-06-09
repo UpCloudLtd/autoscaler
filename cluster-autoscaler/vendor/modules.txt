@@ -104,10 +104,6 @@ github.com/Microsoft/hcsshim/osversion
 github.com/NYTimes/gziphandler
 # github.com/UpCloudLtd/upcloud-go-api/v6 v6.1.1
 ## explicit; go 1.18
-github.com/UpCloudLtd/upcloud-go-api/v6/upcloud
-github.com/UpCloudLtd/upcloud-go-api/v6/upcloud/client
-github.com/UpCloudLtd/upcloud-go-api/v6/upcloud/request
-github.com/UpCloudLtd/upcloud-go-api/v6/upcloud/service
 # github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230321174746-8dcc6526cfb1
 ## explicit; go 1.18
 github.com/antlr/antlr4/runtime/Go/antlr/v4
@@ -412,7 +408,6 @@ github.com/grpc-ecosystem/grpc-gateway/v2/runtime
 github.com/grpc-ecosystem/grpc-gateway/v2/utilities
 # github.com/hashicorp/go-cleanhttp v0.5.1
 ## explicit
-github.com/hashicorp/go-cleanhttp
 # github.com/imdario/mergo v0.3.15
 ## explicit; go 1.13
 github.com/imdario/mergo

@@ -3,6 +3,7 @@
 This is just experimental implementation and it's not working as intended yet.
 
 ## Todo
+- [x] vendor UpCloud Go SDK
 - [ ] implement NodeGroup.DeleteNodes() - scaling down is not working
 - [ ] clean up code and fix bugs
 - [ ] add tests
