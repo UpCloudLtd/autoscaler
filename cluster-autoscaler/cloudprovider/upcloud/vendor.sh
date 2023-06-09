@@ -48,6 +48,4 @@ type ManagedDatabaseLogicalDatabaseManager interface {}
 type Permission interface {}
 " > $sdk_dir/service/stubs.go
 
-#github.com/UpCloudLtd/upcloud-go-api/v6 -> "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/UpCloudLtd/upcloud-go-api/v6"
-# "${UPCLOUD_SDK_PACKAGE} -> "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/${UPCLOUD_SDK_PACKAGE}
 find $sdk_dir -name "*.go" -exec sed -i 's#"'${UPCLOUD_SDK_PACKAGE}'#"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/'${UPCLOUD_SDK_PACKAGE}'#gI' {} \;
