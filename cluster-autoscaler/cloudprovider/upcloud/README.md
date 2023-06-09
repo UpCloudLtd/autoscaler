@@ -9,10 +9,13 @@ This is just experimental implementation and it's not working as intended yet.
 - [ ] add tests
 
 ## Configuration
-Required environment variables
+### Required environment variables
 - `UPCLOUD_USERNAME` - UpCloud's API username
 - `UPCLOUD_PASSWORD` - UpCloud's API user's password
 - `UPCLOUD_CLUSTER_ID` - UKS cluster ID
+
+### Optional environment variables
+- `UPCLOUD_DEBUG_API_BASE_URL` - Use alternative UpCloud API URL
 
 ## Build
 Go to `autoscaler/cluster-autoscaler` directory  
@@ -42,3 +45,14 @@ Deploy example app
 $ kubectl apply -f examples/testing/deployment.yaml
 ```
 Increase app replicas (e.g. 20-50) until you see node group scaling up.
+
+## Run locally using kubeconfig file 
+Build `autoscaler/cluster-autoscaler/cluster-autoscaler-amd64` binary
+```shell
+$ make build
+```
+
+Setup environment variables and run autoscaler binary:
+```shell
+$ ./cluster-autoscaler-amd64 --address=:8087 --cloud-provider=upcloud --stderrthreshold=info --scale-down-enabled=false --v=4 --kubeconfig=<path to kubeconfig file>
+```
