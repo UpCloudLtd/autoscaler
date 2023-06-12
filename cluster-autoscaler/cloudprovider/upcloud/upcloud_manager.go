@@ -25,10 +25,11 @@ type upCloudService interface {
 
 type Manager struct {
 	clusterID uuid.UUID
-
-	svc        upCloudService
-	nodeGroups []UpCloudNodeGroup
-	mu         sync.Mutex
+	// TODO: set limits according to cluster plan
+	clusterPlan string
+	svc         upCloudService
+	nodeGroups  []UpCloudNodeGroup
+	mu          sync.Mutex
 }
 
 func (m *Manager) Refresh() error {
@@ -89,11 +90,22 @@ func newManager() (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cluster ID %s is not valid UUID %w", envUpCloudClusterID, err)
 	}
+	svc := service.New(client.New(upCloudUsername, upCloudPassword))
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
+	defer cancel()
+	cluster, err := svc.GetKubernetesCluster(ctx, &request.GetKubernetesClusterRequest{
+		UUID: clusterID.String(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Manager{
-		clusterID:  clusterID,
-		svc:        service.New(client.New(upCloudUsername, upCloudPassword)),
-		nodeGroups: make([]UpCloudNodeGroup, 0),
-		mu:         sync.Mutex{},
+		clusterID:   clusterID,
+		clusterPlan: cluster.Plan,
+		svc:         svc,
+		nodeGroups:  make([]UpCloudNodeGroup, 0),
+		mu:          sync.Mutex{},
 	}, nil
 }
 

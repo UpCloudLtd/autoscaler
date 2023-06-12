@@ -19,7 +19,7 @@ const (
 	timeoutDeleteNode           time.Duration = time.Second * 20
 
 	nodeGroupMinSize int = 0
-	nodeGroupMaxSize int = 10
+	nodeGroupMaxSize int = 20
 
 	logInfo  klog.Level = 4
 	logDebug klog.Level = 5
