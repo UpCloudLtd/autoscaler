@@ -132,7 +132,7 @@ func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 			return err
 		}
 	}
-	return cloudprovider.ErrNotImplemented
+	return nil
 }
 
 func (u *UpCloudNodeGroup) deleteNode(nodeName string) error {
