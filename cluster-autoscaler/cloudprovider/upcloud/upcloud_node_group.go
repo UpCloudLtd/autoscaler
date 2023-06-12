@@ -32,19 +32,19 @@ type UpCloudNodeGroup struct {
 func (u *UpCloudNodeGroup) Id() string {
 	id := fmt.Sprintf("%s/%s", u.clusterID.String(), u.name)
 	// set log level higher because this get called a lot
-	klog.V(5).Infof("UpCloud %s/NodeGroup.Id called", id)
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Id called", id)
 	return id
 }
 
 // MinSize returns minimum size of the node group.
 func (u *UpCloudNodeGroup) MinSize() int {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.MinSize called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.MinSize called", u.Id())
 	return u.minSize
 }
 
 // MaxSize returns maximum size of the node group.
 func (u *UpCloudNodeGroup) MaxSize() int {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.MaxSize called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.MaxSize called", u.Id())
 	return u.maxSize
 }
 
@@ -53,7 +53,7 @@ func (u *UpCloudNodeGroup) MaxSize() int {
 // to Size() once everything stabilizes (new nodes finish startup and registration or
 // removed nodes are deleted completely). Implementation required.
 func (u *UpCloudNodeGroup) TargetSize() (int, error) {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.TargetSize called (%d)", u.Id(), u.size)
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TargetSize called (%d)", u.Id(), u.size)
 	return u.size, nil
 }
 
@@ -61,7 +61,7 @@ func (u *UpCloudNodeGroup) TargetSize() (int, error) {
 // to explicitly name it and use DeleteNode. This function should wait until
 // node group size is updated. Implementation required.
 func (u *UpCloudNodeGroup) IncreaseSize(delta int) error {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.IncreaseSize(%d) called", u.Id(), delta)
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.IncreaseSize(%d) called", u.Id(), delta)
 	if delta <= 0 {
 		return fmt.Errorf("failed to increase node group size, delta=%d", delta)
 	}
@@ -78,7 +78,7 @@ func (u *UpCloudNodeGroup) IncreaseSize(delta int) error {
 // It is assumed that cloud provider will not delete the existing nodes when there
 // is an option to just decrease the target. Implementation required.
 func (u *UpCloudNodeGroup) DecreaseTargetSize(delta int) error {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.DecreaseTargetSize(%d) called", u.Id(), delta)
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.DecreaseTargetSize(%d) called", u.Id(), delta)
 	if delta >= 0 {
 		return fmt.Errorf("failed to increase node group size, delta=%d", delta)
 	}
@@ -92,6 +92,7 @@ func (u *UpCloudNodeGroup) DecreaseTargetSize(delta int) error {
 func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutModifyNodeGroup)
 	defer cancel()
+	klog.V(logInfo).Infof("scaling node group %s from %d to %d", u.Id(), u.size, size)
 	_, err := u.svc.ModifyKubernetesNodeGroup(ctx, &request.ModifyKubernetesNodeGroupRequest{
 		ClusterUUID: u.clusterID.String(),
 		Name:        u.name,
@@ -125,7 +126,7 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 // failure or if the given node doesn't belong to this node group. This function
 // should wait until node group size is updated. Implementation required.
 func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.DeleteNodes called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.DeleteNodes called", u.Id())
 	for i := range nodes {
 		if err := u.deleteNode(nodes[i].GetName()); err != nil {
 			return err
@@ -137,7 +138,7 @@ func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 func (u *UpCloudNodeGroup) deleteNode(nodeName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDeleteNode)
 	defer cancel()
-	klog.V(4).Infof("deleting UpCloud %s/node %s", u.Id(), nodeName)
+	klog.V(logInfo).Infof("deleting UpCloud %s/node %s", u.Id(), nodeName)
 	return u.svc.DeleteKubernetesNodeGroupNode(ctx, &request.DeleteKubernetesNodeGroupNodeRequest{
 		ClusterUUID:   u.clusterID.String(),
 		NodeGroupName: u.name,
@@ -150,20 +151,20 @@ func (u *UpCloudNodeGroup) deleteNode(nodeName string) error {
 // Other fields are optional.
 // This list should include also instances that might have not become a kubernetes node yet.
 func (u *UpCloudNodeGroup) Nodes() ([]cloudprovider.Instance, error) {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Nodes called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Nodes called", u.Id())
 	return u.nodes, nil
 }
 
 // Autoprovisioned returns true if the node group is autoprovisioned. An autoprovisioned group
 // was created by CA and can be deleted when scaled to 0.
 func (u *UpCloudNodeGroup) Autoprovisioned() bool {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Autoprovisioned called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Autoprovisioned called", u.Id())
 	return false
 }
 
 // Create creates the node group on the cloud provider side. Implementation optional.
 func (u *UpCloudNodeGroup) Create() (cloudprovider.NodeGroup, error) {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Create called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Create called", u.Id())
 	return nil, cloudprovider.ErrNotImplemented
 }
 
@@ -171,7 +172,7 @@ func (u *UpCloudNodeGroup) Create() (cloudprovider.NodeGroup, error) {
 // This will be executed only for autoprovisioned node groups, once their size drops to 0.
 // Implementation optional.
 func (u *UpCloudNodeGroup) Delete() error {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Delete called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Delete called", u.Id())
 	return cloudprovider.ErrNotImplemented
 }
 
@@ -179,20 +180,20 @@ func (u *UpCloudNodeGroup) Delete() error {
 // NodeGroup. Returning a nil will result in using default options.
 // Implementation optional.
 func (u *UpCloudNodeGroup) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.GetOptions called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.GetOptions called", u.Id())
 	return nil, cloudprovider.ErrNotImplemented
 }
 
 // Debug returns a string containing all information regarding this node group.
 func (u *UpCloudNodeGroup) Debug() string {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Debug called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Debug called", u.Id())
 	return fmt.Sprintf("Node group ID: %s (min:%d max:%d)", u.Id(), u.MinSize(), u.MaxSize())
 }
 
 // Exist checks if the node group really exists on the cloud provider side. Allows to tell the
 // theoretical node group from the real one. Implementation required.
 func (u *UpCloudNodeGroup) Exist() bool {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.Exist called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.Exist called", u.Id())
 	return u.name != ""
 }
 
@@ -203,6 +204,6 @@ func (u *UpCloudNodeGroup) Exist() bool {
 // capacity and allocatable information as well as all pods that are started on
 // the node by default, using manifest (most likely only kube-proxy). Implementation optional.
 func (u *UpCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
-	klog.V(4).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
 	return nil, cloudprovider.ErrNotImplemented
 }

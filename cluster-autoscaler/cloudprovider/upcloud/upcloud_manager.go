@@ -58,12 +58,12 @@ func (m *Manager) Refresh() error {
 			svc:       m.svc,
 			nodes:     nodes,
 		}
-		klog.V(4).Infof("caching cluster %s node group %s size=%d minSize=%d maxSize=%d nodes=%d",
+		klog.V(logInfo).Infof("caching cluster %s node group %s size=%d minSize=%d maxSize=%d nodes=%d",
 			m.clusterID.String(), group.name, group.size, group.minSize, group.maxSize, len(groups))
 		groups = append(groups, group)
 	}
 	m.nodeGroups = groups
-	klog.V(4).Infof("refreshed node groups (%d)", len(m.nodeGroups))
+	klog.V(logInfo).Infof("refreshed node groups (%d)", len(m.nodeGroups))
 	return nil
 }
 
@@ -101,7 +101,7 @@ func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]clo
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
 	defer cancel()
 	instances := make([]cloudprovider.Instance, 0)
-	klog.V(4).Infof("fetching node group %s/%s details", clusterID.String(), name)
+	klog.V(logInfo).Infof("fetching node group %s/%s details", clusterID.String(), name)
 	ng, err := svc.GetKubernetesNodeGroupDetails(ctx, &request.GetKubernetesNodeGroupRequest{
 		ClusterUUID: clusterID.String(),
 		Name:        name,
