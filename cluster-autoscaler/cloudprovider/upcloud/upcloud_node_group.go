@@ -118,6 +118,7 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 			u.size = size
 			return nil
 		}
+		time.Sleep(2 * time.Second)
 	}
 	return errors.New("failed scale node group, state check timed out")
 }
@@ -127,11 +128,14 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 // should wait until node group size is updated. Implementation required.
 func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.DeleteNodes called", u.Id())
+	deleted := 0
 	for i := range nodes {
 		if err := u.deleteNode(nodes[i].GetName()); err != nil {
 			return err
 		}
+		deleted++
 	}
+	u.size = u.size - deleted
 	return nil
 }
 

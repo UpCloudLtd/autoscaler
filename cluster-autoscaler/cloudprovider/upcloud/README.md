@@ -6,7 +6,7 @@ This is just experimental implementation and it's not working as intended yet.
 - [x] vendor UpCloud Go SDK
 - [x] implement NodeGroup.DeleteNodes() - scaling down is not working
 - [ ] clean up code and fix bugs
-- [ ] add tests
+- [ ] add more tests
 
 ## Configuration
 ### Required environment variables
@@ -31,7 +31,7 @@ $ docker build -t <image:tag> -f Dockerfile.amd64 .
 ```
 
 ## Deployment
-Update your UKS cluster ID (`UPCLOUD_CLUSTER_ID`) into [examples/cluster-autoscaler.yaml](./examples/cluster-autoscaler.yaml)
+Update your UKS cluster ID (`UPCLOUD_CLUSTER_ID`) and image TAG (`IMAGE_TAG`) into [examples/cluster-autoscaler.yaml](./examples/cluster-autoscaler.yaml)
 
 ```shell
 $ kubectl apply -f examples/rbac.yaml

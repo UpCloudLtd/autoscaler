@@ -3,7 +3,7 @@ UPCLOUD_SDK_PACKAGE ?= github.com/upcloudltd/upcloud-go-api/v6
 # TODO: change to v6.3.2 when released
 UPCLOUD_SDK_VERSION ?= main 
 
-IMAGE_TAG ?= ghcr.io/peknur/uks-ca:dev
+IMAGE_TAG ?= upcloud-autoscaler:0.1-dev
 
 build:
 	BUILD_TAGS=upcloud make -C ../../ build-in-docker

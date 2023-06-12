@@ -19,7 +19,7 @@ spec:
       containers:
         - name: cluster-autoscaler
           priorityClassName: system-cluster-critical
-          image: ghcr.io/peknur/uks-ca:dev
+          image: ${IMAGE_TAG}
           imagePullPolicy: "Always"
           resources:
             limits:
@@ -36,7 +36,7 @@ spec:
             - --v=4
           env:
             - name: UPCLOUD_CLUSTER_ID
-              value: ""
+              value: "${UPCLOUD_CLUSTER_ID}"
             - name: UPCLOUD_USERNAME
               valueFrom:
                 secretKeyRef:
