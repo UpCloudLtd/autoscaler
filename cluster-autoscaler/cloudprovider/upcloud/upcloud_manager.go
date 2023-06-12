@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -20,8 +19,8 @@ type upCloudService interface {
 	GetKubernetesNodeGroups(ctx context.Context, r *request.GetKubernetesNodeGroupsRequest) ([]upcloud.KubernetesNodeGroup, error)
 	GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
 	ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
-	GetServerGroups(ctx context.Context, r *request.GetServerGroupsRequest) (upcloud.ServerGroups, error)
-	GetServerDetails(ctx context.Context, r *request.GetServerDetailsRequest) (*upcloud.ServerDetails, error)
+	DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error
+	GetKubernetesNodeGroupDetails(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error)
 }
 
 type Manager struct {
@@ -101,64 +100,39 @@ func newManager() (*Manager, error) {
 func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]cloudprovider.Instance, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
 	defer cancel()
-	n := make([]cloudprovider.Instance, 0)
-
-	klog.V(4).Infof("fetching server group to determine %s/%s nodes", clusterID.String(), name)
-	serverGroups, err := svc.GetServerGroups(ctx, &request.GetServerGroupsRequest{
-		Filters: []request.QueryFilter{
-			request.FilterLabel{
-				Label: upcloud.Label{
-					Key:   "capu_cluster_id",
-					Value: clusterID.String(),
-				},
-			},
-			request.FilterLabel{
-				Label: upcloud.Label{
-					Key:   "capu_generated_name",
-					Value: fmt.Sprintf("%s-server-group", name),
-				},
-			},
-		},
+	instances := make([]cloudprovider.Instance, 0)
+	klog.V(4).Infof("fetching node group %s/%s details", clusterID.String(), name)
+	ng, err := svc.GetKubernetesNodeGroupDetails(ctx, &request.GetKubernetesNodeGroupRequest{
+		ClusterUUID: clusterID.String(),
+		Name:        name,
 	})
 	if err != nil {
-		return n, err
+		return instances, err
 	}
-	if len(serverGroups) != 1 {
-		return n, fmt.Errorf("got ambiguous server groups response, wanted 1 got %d", len(serverGroups))
-	}
-	serverGroup := serverGroups[0]
-	klog.V(4).Infof("%s/%s found server group %s with %d members [%s]",
-		clusterID.String(), name, serverGroup.Title, len(serverGroup.Members), strings.Join(serverGroup.Members, ","))
-
-	for _, serverID := range serverGroup.Members {
-		ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-		defer cancel()
-		srv, err := svc.GetServerDetails(ctx, &request.GetServerDetailsRequest{UUID: serverID})
-		if err != nil {
-			return n, fmt.Errorf("failed to get node details, %w", err)
-		}
-		n = append(n, cloudprovider.Instance{
-			Id:     fmt.Sprintf("upcloud:////%s", serverID),
-			Status: serverStateToInstanceStatus(srv.State),
+	for i := range ng.Nodes {
+		node := ng.Nodes[i]
+		instances = append(instances, cloudprovider.Instance{
+			Id:     fmt.Sprintf("upcloud:////%s", node.UUID),
+			Status: nodeStateToInstanceStatus(node.State),
 		})
 	}
-
-	return n, nil
+	return instances, err
 }
 
-func serverStateToInstanceStatus(serverStatus string) *cloudprovider.InstanceStatus {
+func nodeStateToInstanceStatus(nodeState upcloud.KubernetesNodeState) *cloudprovider.InstanceStatus {
 	var s cloudprovider.InstanceState
 	var e *cloudprovider.InstanceErrorInfo
-	switch serverStatus {
-	case "started":
+	switch nodeState {
+	case upcloud.KubernetesNodeStateRunning:
 		s = cloudprovider.InstanceRunning
-	case "maintenance", "stopped":
+	case upcloud.KubernetesNodeStateTerminating:
 		s = cloudprovider.InstanceDeleting
+	case upcloud.KubernetesNodeStatePending:
+		s = cloudprovider.InstanceCreating
 	default:
-		// error
 		e = &cloudprovider.InstanceErrorInfo{
 			ErrorClass: cloudprovider.OtherErrorClass,
-			ErrorCode:  serverStatus,
+			ErrorCode:  string(nodeState),
 		}
 	}
 	return &cloudprovider.InstanceStatus{

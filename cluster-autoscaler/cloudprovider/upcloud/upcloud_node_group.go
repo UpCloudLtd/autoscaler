@@ -125,12 +125,24 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 // failure or if the given node doesn't belong to this node group. This function
 // should wait until node group size is updated. Implementation required.
 func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
-	// TODO: This needs to be implemented properly when we have API support
 	klog.V(4).Infof("UpCloud %s/NodeGroup.DeleteNodes called", u.Id())
 	for i := range nodes {
-		klog.V(4).Infof("tried to delete UpCloud %s/node %s", u.Id(), nodes[i].Spec.ProviderID)
+		if err := u.deleteNode(nodes[i].GetName()); err != nil {
+			return err
+		}
 	}
 	return cloudprovider.ErrNotImplemented
+}
+
+func (u *UpCloudNodeGroup) deleteNode(nodeName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutDeleteNode)
+	defer cancel()
+	klog.V(4).Infof("deleting UpCloud %s/node %s", u.Id(), nodeName)
+	return u.svc.DeleteKubernetesNodeGroupNode(ctx, &request.DeleteKubernetesNodeGroupNodeRequest{
+		ClusterUUID:   u.clusterID.String(),
+		NodeGroupName: u.name,
+		Name:          nodeName,
+	})
 }
 
 // Nodes returns a list of all nodes that belong to this node group.

@@ -14,4 +14,6 @@ type ManagedDatabaseServiceManager interface {}
 type ManagedDatabaseUserManager interface {}
 type ManagedDatabaseLogicalDatabaseManager interface {}
 type Permission interface {}
+type ServerGroup interface {}
+type Server interface {}
 

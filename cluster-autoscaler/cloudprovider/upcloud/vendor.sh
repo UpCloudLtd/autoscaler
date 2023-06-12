@@ -18,17 +18,10 @@ sdk_download () {
     curl -sO --output-dir $1 $2
 }
 
-sdk_download $sdk_dir "${sdk_url}/upcloud/{kubernetes.go,network.go,problem.go,label.go,utils.go,ip_address.go}"
+sdk_download $sdk_dir "${sdk_url}/upcloud/{kubernetes.go,problem.go,utils.go,label.go,ip_address.go,network.go}"
 sdk_download $sdk_dir/client "${sdk_url}/upcloud/client/{client,error}.go"
-sdk_download $sdk_dir/request "${sdk_url}/upcloud/request/{kubernetes.go,network.go,request.go,label.go}"
+sdk_download $sdk_dir/request "${sdk_url}/upcloud/request/{kubernetes.go,request.go,network.go}"
 sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service.go,network.go}"
-
-
-# TODO: remove when UKS node API endpoints are available and append ServerGroup and Server interfaces to stubs.go
-sdk_download $sdk_dir "${sdk_url}/upcloud/{server_group.go,server.go,storage.go}"
-sdk_download $sdk_dir/request "${sdk_url}/upcloud/request/{server_group.go,server.go,storage.go}"
-sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{server_group.go,server.go}"
-
 
 echo "
 package service
@@ -46,6 +39,8 @@ type ManagedDatabaseServiceManager interface {}
 type ManagedDatabaseUserManager interface {}
 type ManagedDatabaseLogicalDatabaseManager interface {}
 type Permission interface {}
+type ServerGroup interface {}
+type Server interface {}
 " > $sdk_dir/service/stubs.go
 
 find $sdk_dir -name "*.go" -exec sed -i 's#"'${UPCLOUD_SDK_PACKAGE}'#"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/'${UPCLOUD_SDK_PACKAGE}'#gI' {} \;

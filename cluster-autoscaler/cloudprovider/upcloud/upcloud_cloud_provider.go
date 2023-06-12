@@ -16,6 +16,7 @@ const (
 	timeoutGetRequest           time.Duration = time.Second * 10
 	timeoutModifyNodeGroup      time.Duration = time.Second * 20
 	timeoutNodeGroupStateChange time.Duration = time.Minute * 20
+	timeoutDeleteNode           time.Duration = time.Second * 20
 
 	nodeGroupMinSize int = 0
 	nodeGroupMaxSize int = 10
