@@ -1,5 +1,5 @@
-//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !packet && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud
-// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!packet,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud
+//go:build !gce && !aws && !azure && !kubemark && !alicloud && !magnum && !digitalocean && !clusterapi && !huaweicloud && !ionoscloud && !linode && !hetzner && !bizflycloud && !brightbox && !packet && !oci && !vultr && !tencentcloud && !scaleway && !externalgrpc && !civo && !rancher && !baiducloud && !cherry && !cloudstack && !exoscale && !kamatera && !ovhcloud && !upcloud
+// +build !gce,!aws,!azure,!kubemark,!alicloud,!magnum,!digitalocean,!clusterapi,!huaweicloud,!ionoscloud,!linode,!hetzner,!bizflycloud,!brightbox,!packet,!oci,!vultr,!tencentcloud,!scaleway,!externalgrpc,!civo,!rancher,!baiducloud,!cherry,!cloudstack,!exoscale,!kamatera,!ovhcloud,!upcloud
 
 /*
 Copyright 2018 The Kubernetes Authors.
@@ -47,6 +47,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/rancher"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/scaleway"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/tencentcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/vultr"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
@@ -80,6 +81,7 @@ var AvailableCloudProviders = []string{
 	cloudprovider.CivoProviderName,
 	cloudprovider.ScalewayProviderName,
 	cloudprovider.RancherProviderName,
+	cloudprovider.UpCloudProviderName,
 }
 
 // DefaultCloudProvider is GCE.
@@ -141,6 +143,8 @@ func buildCloudProvider(opts config.AutoscalingOptions, do cloudprovider.NodeGro
 		return scaleway.BuildScaleway(opts, do, rl)
 	case cloudprovider.RancherProviderName:
 		return rancher.BuildRancher(opts, do, rl)
+	case cloudprovider.UpCloudProviderName:
+		return upcloud.BuildUpCloud(opts, do, rl)
 	}
 	return nil
 }
