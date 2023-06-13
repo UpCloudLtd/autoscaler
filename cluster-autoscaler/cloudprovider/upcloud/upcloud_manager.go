@@ -28,8 +28,9 @@ type Manager struct {
 	// TODO: set limits according to cluster plan
 	clusterPlan string
 	svc         upCloudService
-	nodeGroups  []UpCloudNodeGroup
-	mu          sync.Mutex
+	nodeGroups  []*UpCloudNodeGroup
+
+	mu sync.Mutex
 }
 
 func (m *Manager) Refresh() error {
@@ -37,7 +38,7 @@ func (m *Manager) Refresh() error {
 	defer m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
 	defer cancel()
-	groups := make([]UpCloudNodeGroup, 0)
+	groups := make([]*UpCloudNodeGroup, 0)
 	upcloudNodeGroups, err := m.svc.GetKubernetesNodeGroups(ctx, &request.GetKubernetesNodeGroupsRequest{
 		ClusterUUID: m.clusterID.String(),
 	})
@@ -58,17 +59,18 @@ func (m *Manager) Refresh() error {
 			maxSize:   nodeGroupMaxSize,
 			svc:       m.svc,
 			nodes:     nodes,
+			mu:        sync.Mutex{},
 		}
 		klog.V(logInfo).Infof("caching cluster %s node group %s size=%d minSize=%d maxSize=%d nodes=%d",
 			m.clusterID.String(), group.name, group.size, group.minSize, group.maxSize, len(groups))
-		groups = append(groups, group)
+		groups = append(groups, &group)
 	}
 	m.nodeGroups = groups
 	klog.V(logInfo).Infof("refreshed node groups (%d)", len(m.nodeGroups))
 	return nil
 }
 
-func newManager() (*Manager, error) {
+func newManager(userAgent string) (*Manager, error) {
 	const (
 		envUpCloudUsername  string = "UPCLOUD_USERNAME"
 		envUpCloudPassword  string = "UPCLOUD_PASSWORD"
@@ -90,7 +92,11 @@ func newManager() (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cluster ID %s is not valid UUID %w", envUpCloudClusterID, err)
 	}
-	svc := service.New(client.New(upCloudUsername, upCloudPassword))
+	upClient := client.New(upCloudUsername, upCloudPassword)
+	if userAgent != "" {
+		upClient.UserAgent = userAgent
+	}
+	svc := service.New(upClient)
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
 	defer cancel()
 	cluster, err := svc.GetKubernetesCluster(ctx, &request.GetKubernetesClusterRequest{
@@ -104,7 +110,7 @@ func newManager() (*Manager, error) {
 		clusterID:   clusterID,
 		clusterPlan: cluster.Plan,
 		svc:         svc,
-		nodeGroups:  make([]UpCloudNodeGroup, 0),
+		nodeGroups:  make([]*UpCloudNodeGroup, 0),
 		mu:          sync.Mutex{},
 	}, nil
 }

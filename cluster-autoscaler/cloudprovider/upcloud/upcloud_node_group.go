@@ -2,8 +2,8 @@ package upcloud
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +26,8 @@ type UpCloudNodeGroup struct {
 
 	nodes []cloudprovider.Instance
 	svc   upCloudService
+
+	mu sync.Mutex
 }
 
 // Id returns an unique identifier of the node group.
@@ -90,6 +92,8 @@ func (u *UpCloudNodeGroup) DecreaseTargetSize(delta int) error {
 }
 
 func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutModifyNodeGroup)
 	defer cancel()
 	klog.V(logInfo).Infof("scaling node group %s from %d to %d", u.Id(), u.size, size)
@@ -103,24 +107,35 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 	if err != nil {
 		return fmt.Errorf("failed to scale node group %s, %w", u.name, err)
 	}
-	pollCtx, pollCancel := context.WithTimeout(context.Background(), timeoutModifyNodeGroup)
-	defer pollCancel()
-	deadline := time.Now().Add(timeoutNodeGroupStateChange)
+	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutModifyNodeGroup)
+	if err != nil {
+		return err
+	}
+	u.size = nodeGroup.Count
+	return nil
+}
+
+func (u *UpCloudNodeGroup) waitNodeGroupState(state upcloud.KubernetesNodeGroupState, timeout time.Duration) (*upcloud.KubernetesNodeGroup, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
+	defer cancel()
+	deadline := time.Now().Add(timeout)
+	i := 1
 	for time.Now().Before(deadline) {
-		g, err := u.svc.GetKubernetesNodeGroup(pollCtx, &request.GetKubernetesNodeGroupRequest{
+		klog.V(logInfo).Infof("waiting(%d) node group %s state %s", i, u.Id(), state)
+		g, err := u.svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
 			ClusterUUID: u.clusterID.String(),
 			Name:        u.name,
 		})
 		if err != nil {
-			return fmt.Errorf("failed to node group %s state, %w", u.name, err)
+			return g, fmt.Errorf("failed to fetch node group %s, %w", u.Id(), err)
 		}
-		if g.Count == size && g.State == upcloud.KubernetesNodeGroupStateRunning {
-			u.size = size
-			return nil
+		if g.State == state {
+			return g, nil
 		}
 		time.Sleep(2 * time.Second)
+		i++
 	}
-	return errors.New("failed scale node group, state check timed out")
+	return nil, fmt.Errorf("node group %s state check timed out", u.Id())
 }
 
 // DeleteNodes deletes nodes from this node group. Error is returned either on
@@ -128,14 +143,18 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 // should wait until node group size is updated. Implementation required.
 func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.DeleteNodes called", u.Id())
-	deleted := 0
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	for i := range nodes {
 		if err := u.deleteNode(nodes[i].GetName()); err != nil {
 			return err
 		}
-		deleted++
 	}
-	u.size = u.size - deleted
+	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutModifyNodeGroup)
+	if err != nil {
+		return err
+	}
+	u.size = nodeGroup.Count
 	return nil
 }
 

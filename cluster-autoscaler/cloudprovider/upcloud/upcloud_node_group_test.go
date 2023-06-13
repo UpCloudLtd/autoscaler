@@ -65,7 +65,15 @@ func TestUpCloudNodeGroup_DecreaseTargetSize(t *testing.T) {
 	require.Equal(t, 2, size)
 }
 func TestUpCloudNodeGroup_DeleteNodes(t *testing.T) {
-	svc := upCloudServiceMock{}
+	svc := upCloudServiceMock{
+		nodeGroups: []upcloud.KubernetesNodeGroup{
+			{
+				Name:  "test",
+				Count: 1,
+				State: upcloud.KubernetesNodeGroupStateRunning,
+			},
+		},
+	}
 	g := &UpCloudNodeGroup{size: 3, maxSize: 20, name: "test", svc: &svc}
 	require.NoError(t, g.DeleteNodes([]*v1.Node{
 		{ObjectMeta: metav1.ObjectMeta{Name: "test-1"}},

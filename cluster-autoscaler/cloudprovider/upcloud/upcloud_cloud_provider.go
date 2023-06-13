@@ -18,7 +18,7 @@ const (
 	timeoutNodeGroupStateChange time.Duration = time.Minute * 20
 	timeoutDeleteNode           time.Duration = time.Second * 20
 
-	nodeGroupMinSize int = 0
+	nodeGroupMinSize int = 1
 	nodeGroupMaxSize int = 20
 
 	logInfo  klog.Level = 4
@@ -42,7 +42,7 @@ func (u *UpCloudCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
 	klog.V(logDebug).Info("UpCloud CloudProvider.NodeGroups called")
 	nodeGroups := make([]cloudprovider.NodeGroup, len(u.manager.nodeGroups))
 	for i, ng := range u.manager.nodeGroups {
-		nodeGroups[i] = &ng
+		nodeGroups[i] = ng
 	}
 	return nodeGroups
 }
@@ -60,7 +60,7 @@ func (u *UpCloudCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider
 		}
 		for _, n := range nodes {
 			if n.Id == providerID {
-				return &group, nil
+				return group, nil
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func (u *UpCloudCloudProvider) Cleanup() error {
 }
 
 func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	manager, err := newManager()
+	manager, err := newManager(opts.UserAgent)
 	if err != nil {
 		klog.Fatalf("failed to initialize manager: %w", err)
 	}
