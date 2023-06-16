@@ -17,10 +17,9 @@ import (
 
 type upCloudService interface {
 	GetKubernetesNodeGroups(ctx context.Context, r *request.GetKubernetesNodeGroupsRequest) ([]upcloud.KubernetesNodeGroup, error)
-	GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
+	GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error)
 	ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
 	DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error
-	GetKubernetesNodeGroupDetails(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error)
 }
 
 type Manager struct {
@@ -62,7 +61,7 @@ func (m *Manager) Refresh() error {
 			mu:        sync.Mutex{},
 		}
 		klog.V(logInfo).Infof("caching cluster %s node group %s size=%d minSize=%d maxSize=%d nodes=%d",
-			m.clusterID.String(), group.name, group.size, group.minSize, group.maxSize, len(groups))
+			m.clusterID.String(), group.name, group.size, group.minSize, group.maxSize, len(nodes))
 		groups = append(groups, &group)
 	}
 	m.nodeGroups = groups
@@ -120,7 +119,7 @@ func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]clo
 	defer cancel()
 	instances := make([]cloudprovider.Instance, 0)
 	klog.V(logInfo).Infof("fetching node group %s/%s details", clusterID.String(), name)
-	ng, err := svc.GetKubernetesNodeGroupDetails(ctx, &request.GetKubernetesNodeGroupRequest{
+	ng, err := svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
 		ClusterUUID: clusterID.String(),
 		Name:        name,
 	})

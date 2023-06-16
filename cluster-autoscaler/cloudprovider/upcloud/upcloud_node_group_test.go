@@ -147,7 +147,7 @@ func (s *upCloudServiceMock) DeleteKubernetesNodeGroupNode(ctx context.Context, 
 	return nil
 }
 
-func (s *upCloudServiceMock) GetKubernetesNodeGroupDetails(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error) {
+func (s *upCloudServiceMock) GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error) {
 	for i := range s.detailedNodeGroups {
 		g := s.detailedNodeGroups[i]
 		if g.Name == r.Name {
@@ -155,14 +155,4 @@ func (s *upCloudServiceMock) GetKubernetesNodeGroupDetails(ctx context.Context, 
 		}
 	}
 	return nil, fmt.Errorf("node group details not found %+v", r)
-}
-
-func (s *upCloudServiceMock) GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error) {
-	for i := range s.nodeGroups {
-		g := s.nodeGroups[i]
-		if g.Name == r.Name {
-			return &g, nil
-		}
-	}
-	return nil, fmt.Errorf("node group not found %+v", r)
 }
