@@ -115,12 +115,12 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 	return nil
 }
 
-func (u *UpCloudNodeGroup) waitNodeGroupState(state upcloud.KubernetesNodeGroupState, timeout time.Duration) (*upcloud.KubernetesNodeGroup, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-	defer cancel()
+func (u *UpCloudNodeGroup) waitNodeGroupState(state upcloud.KubernetesNodeGroupState, timeout time.Duration) (*upcloud.KubernetesNodeGroupDetails, error) {
 	deadline := time.Now().Add(timeout)
 	i := 1
 	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
+		defer cancel()
 		klog.V(logInfo).Infof("waiting(%d) node group %s state %s", i, u.Id(), state)
 		g, err := u.svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
 			ClusterUUID: u.clusterID.String(),
@@ -163,9 +163,9 @@ func (u *UpCloudNodeGroup) deleteNode(nodeName string) error {
 	defer cancel()
 	klog.V(logInfo).Infof("deleting UpCloud %s/node %s", u.Id(), nodeName)
 	return u.svc.DeleteKubernetesNodeGroupNode(ctx, &request.DeleteKubernetesNodeGroupNodeRequest{
-		ClusterUUID:   u.clusterID.String(),
-		NodeGroupName: u.name,
-		Name:          nodeName,
+		ClusterUUID: u.clusterID.String(),
+		Name:        u.name,
+		NodeName:    nodeName,
 	})
 }
 
