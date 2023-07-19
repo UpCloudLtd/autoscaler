@@ -1,11 +1,16 @@
 package upcloud
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/client"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/service"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
@@ -13,6 +18,7 @@ import (
 )
 
 const (
+	timeoutProviderInit         time.Duration = time.Second * 15
 	timeoutGetRequest           time.Duration = time.Second * 10
 	timeoutModifyNodeGroup      time.Duration = time.Second * 20
 	timeoutNodeGroupStateChange time.Duration = time.Minute * 20
@@ -23,7 +29,18 @@ const (
 
 	logInfo  klog.Level = 4
 	logDebug klog.Level = 5
+
+	envUpCloudUsername  string = "UPCLOUD_USERNAME"
+	envUpCloudPassword  string = "UPCLOUD_PASSWORD"
+	envUpCloudClusterID string = "UPCLOUD_CLUSTER_ID"
 )
+
+type upCloudConfig struct {
+	ClusterID string
+	Username  string
+	Password  string
+	UserAgent string
+}
 
 // UpCloudCloudProvider implements cloudprovide.CloudProvider interfaces
 type UpCloudCloudProvider struct {
@@ -138,12 +155,57 @@ func (u *UpCloudCloudProvider) Cleanup() error {
 }
 
 func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	manager, err := newManager(opts.UserAgent)
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutProviderInit)
+	defer cancel()
+
+	cfg, err := buildCloudConfig(opts)
+	if err != nil {
+		klog.Fatalf("failed to initialize UpCloud config: %w", err)
+	}
+	svc, err := newUpCloudService(cfg)
+	if err != nil {
+		klog.Fatalf("failed to initialize UpCloud service: %w", err)
+	}
+	manager, err := newManager(ctx, svc, cfg, opts)
 	if err != nil {
 		klog.Fatalf("failed to initialize manager: %w", err)
 	}
+
+	klog.V(logInfo).Infof("%s cloud provider initialized successfully", opts.CloudProviderName)
 	return &UpCloudCloudProvider{
 		manager:         manager,
 		resourceLimiter: rl,
 	}
+}
+
+// buildCloudConfig builds cloud config for UpCloud provider.
+func buildCloudConfig(opts config.AutoscalingOptions) (upCloudConfig, error) {
+	return cloudConfigFromEnv(opts)
+}
+
+func newUpCloudService(cfg upCloudConfig) (upCloudService, error) {
+	upClient := client.New(cfg.Username, cfg.Password)
+	if cfg.UserAgent != "" {
+		upClient.UserAgent = cfg.UserAgent
+	}
+	return service.New(upClient), nil
+}
+
+func cloudConfigFromEnv(opts config.AutoscalingOptions) (upCloudConfig, error) {
+	cfg := upCloudConfig{}
+
+	if cfg.ClusterID = os.Getenv(envUpCloudClusterID); cfg.ClusterID == "" {
+		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudClusterID)
+	}
+	if cfg.Username = os.Getenv(envUpCloudUsername); cfg.Username == "" {
+		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudUsername)
+	}
+	if cfg.Password = os.Getenv(envUpCloudPassword); cfg.Password == "" {
+		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudPassword)
+	}
+	if opts.UserAgent != "" {
+		cfg.UserAgent = opts.UserAgent
+	}
+
+	return cfg, nil
 }
