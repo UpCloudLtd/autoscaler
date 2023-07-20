@@ -3,31 +3,32 @@ package upcloud
 import (
 	"context"
 	"fmt"
-	"os"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/client"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/service"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/klog/v2"
 )
 
 type upCloudService interface {
+	GetKubernetesCluster(ctx context.Context, r *request.GetKubernetesClusterRequest) (*upcloud.KubernetesCluster, error)
 	GetKubernetesNodeGroups(ctx context.Context, r *request.GetKubernetesNodeGroupsRequest) ([]upcloud.KubernetesNodeGroup, error)
 	GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error)
 	ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
 	DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error
+	GetKubernetesPlans(ctx context.Context, r *request.GetKubernetesPlansRequest) ([]upcloud.KubernetesPlan, error)
 }
 
 type Manager struct {
-	clusterID uuid.UUID
-	// TODO: set limits according to cluster plan
-	clusterPlan string
-	svc         upCloudService
-	nodeGroups  []*UpCloudNodeGroup
+	clusterID  uuid.UUID
+	svc        upCloudService
+	nodeGroups []*UpCloudNodeGroup
+
+	maxNodesTotal int
 
 	mu sync.Mutex
 }
@@ -55,7 +56,7 @@ func (m *Manager) Refresh() error {
 			name:      g.Name,
 			size:      g.Count,
 			minSize:   nodeGroupMinSize,
-			maxSize:   nodeGroupMaxSize,
+			maxSize:   m.maxNodesTotal,
 			svc:       m.svc,
 			nodes:     nodes,
 			mu:        sync.Mutex{},
@@ -69,49 +70,58 @@ func (m *Manager) Refresh() error {
 	return nil
 }
 
-func newManager(userAgent string) (*Manager, error) {
-	const (
-		envUpCloudUsername  string = "UPCLOUD_USERNAME"
-		envUpCloudPassword  string = "UPCLOUD_PASSWORD"
-		envUpCloudClusterID string = "UPCLOUD_CLUSTER_ID"
-	)
-	var (
-		upCloudUsername, upCloudPassword, upCloudClusterID string
-	)
-	if upCloudUsername = os.Getenv(envUpCloudUsername); upCloudUsername == "" {
-		return nil, fmt.Errorf("environment variable %s not set", envUpCloudUsername)
-	}
-	if upCloudPassword = os.Getenv(envUpCloudPassword); upCloudPassword == "" {
-		return nil, fmt.Errorf("environment variable %s not set", envUpCloudPassword)
-	}
-	if upCloudClusterID = os.Getenv(envUpCloudClusterID); upCloudClusterID == "" {
-		return nil, fmt.Errorf("environment variable %s not set", envUpCloudClusterID)
-	}
-	clusterID, err := uuid.Parse(upCloudClusterID)
+func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts config.AutoscalingOptions) (*Manager, error) {
+	clusterUUID, err := uuid.Parse(cfg.ClusterID)
 	if err != nil {
 		return nil, fmt.Errorf("cluster ID %s is not valid UUID %w", envUpCloudClusterID, err)
 	}
-	upClient := client.New(upCloudUsername, upCloudPassword)
-	if userAgent != "" {
-		upClient.UserAgent = userAgent
+
+	maxNodesTotal, err := clusterMaxNodes(ctx, svc, clusterUUID, opts.MaxNodesTotal)
+	if err != nil {
+		return nil, err
 	}
-	svc := service.New(upClient)
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-	defer cancel()
+	return &Manager{
+		clusterID:     clusterUUID,
+		maxNodesTotal: maxNodesTotal,
+		svc:           svc,
+		nodeGroups:    make([]*UpCloudNodeGroup, 0),
+		mu:            sync.Mutex{},
+	}, nil
+}
+
+func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUID, requestedMaxNodesTotal int) (int, error) {
 	cluster, err := svc.GetKubernetesCluster(ctx, &request.GetKubernetesClusterRequest{
 		UUID: clusterID.String(),
 	})
 	if err != nil {
-		return nil, err
+		return requestedMaxNodesTotal, err
 	}
 
-	return &Manager{
-		clusterID:   clusterID,
-		clusterPlan: cluster.Plan,
-		svc:         svc,
-		nodeGroups:  make([]*UpCloudNodeGroup, 0),
-		mu:          sync.Mutex{},
-	}, nil
+	plan, err := clusterPlanByName(ctx, svc, cluster.Plan)
+	if err != nil {
+		return requestedMaxNodesTotal, err
+	}
+
+	if requestedMaxNodesTotal == 0 {
+		return plan.MaxNodes, nil
+	}
+	if requestedMaxNodesTotal > plan.MaxNodes {
+		return requestedMaxNodesTotal, fmt.Errorf("MaxNodesTotal %d is greater than maximum allowed %d with selected %s cluster plan", requestedMaxNodesTotal, plan.MaxNodes, cluster.Plan)
+	}
+	return requestedMaxNodesTotal, nil
+}
+
+func clusterPlanByName(ctx context.Context, svc upCloudService, name string) (upcloud.KubernetesPlan, error) {
+	plans, err := svc.GetKubernetesPlans(ctx, &request.GetKubernetesPlansRequest{})
+	if err != nil {
+		return upcloud.KubernetesPlan{}, err
+	}
+	for i := range plans {
+		if strings.EqualFold(plans[i].Name, name) {
+			return plans[i], nil
+		}
+	}
+	return upcloud.KubernetesPlan{}, fmt.Errorf("can't get cluster plan by name '%s'", name)
 }
 
 func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]cloudprovider.Instance, error) {
