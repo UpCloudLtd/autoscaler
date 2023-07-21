@@ -23,6 +23,7 @@ const (
 	timeoutModifyNodeGroup      time.Duration = time.Second * 20
 	timeoutNodeGroupStateChange time.Duration = time.Minute * 20
 	timeoutDeleteNode           time.Duration = time.Second * 20
+	timeoutWaitNodeGroupState   time.Duration = time.Minute * 20
 
 	nodeGroupMinSize int = 1
 	nodeGroupMaxSize int = 20
