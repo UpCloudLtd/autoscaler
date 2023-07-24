@@ -107,7 +107,7 @@ func (u *UpCloudNodeGroup) scaleNodeGroup(size int) error {
 	if err != nil {
 		return fmt.Errorf("failed to scale node group %s, %w", u.name, err)
 	}
-	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutModifyNodeGroup)
+	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (u *UpCloudNodeGroup) waitNodeGroupState(state upcloud.KubernetesNodeGroupS
 		time.Sleep(2 * time.Second)
 		i++
 	}
-	return nil, fmt.Errorf("node group %s state check timed out", u.Id())
+	return nil, fmt.Errorf("node group %s state check (%d) timed out", u.Id(), i)
 }
 
 // DeleteNodes deletes nodes from this node group. Error is returned either on
@@ -150,7 +150,7 @@ func (u *UpCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 			return err
 		}
 	}
-	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutModifyNodeGroup)
+	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
 	if err != nil {
 		return err
 	}
