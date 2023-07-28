@@ -10,6 +10,8 @@ const (
 
 	KubernetesNodeGroupStatePending     KubernetesNodeGroupState = "pending"
 	KubernetesNodeGroupStateRunning     KubernetesNodeGroupState = "running"
+	KubernetesNodeGroupStateScalingUp   KubernetesNodeGroupState = "scaling-up"
+	KubernetesNodeGroupStateScalingDown KubernetesNodeGroupState = "scaling-down"
 	KubernetesNodeGroupStateTerminating KubernetesNodeGroupState = "terminating"
 	KubernetesNodeGroupStateFailed      KubernetesNodeGroupState = "failed"
 	KubernetesNodeGroupStateUnknown     KubernetesNodeGroupState = "unknown"
@@ -46,16 +48,17 @@ type KubernetesCluster struct {
 }
 
 type KubernetesNodeGroup struct {
-	AntiAffinity bool                     `json:"anti_affinity,omitempty"`
-	Count        int                      `json:"count,omitempty"`
-	KubeletArgs  []KubernetesKubeletArg   `json:"kubelet_args,omitempty"`
-	Labels       []Label                  `json:"labels,omitempty"`
-	Name         string                   `json:"name,omitempty"`
-	Plan         string                   `json:"plan,omitempty"`
-	SSHKeys      []string                 `json:"ssh_keys,omitempty"`
-	State        KubernetesNodeGroupState `json:"state,omitempty"`
-	Storage      string                   `json:"storage,omitempty"`
-	Taints       []KubernetesTaint        `json:"taints,omitempty"`
+	AntiAffinity         bool                     `json:"anti_affinity,omitempty"`
+	Count                int                      `json:"count,omitempty"`
+	KubeletArgs          []KubernetesKubeletArg   `json:"kubelet_args,omitempty"`
+	Labels               []Label                  `json:"labels,omitempty"`
+	Name                 string                   `json:"name,omitempty"`
+	Plan                 string                   `json:"plan,omitempty"`
+	SSHKeys              []string                 `json:"ssh_keys,omitempty"`
+	State                KubernetesNodeGroupState `json:"state,omitempty"`
+	Storage              string                   `json:"storage,omitempty"`
+	Taints               []KubernetesTaint        `json:"taints,omitempty"`
+	UtilityNetworkAccess bool                     `json:"utility_network_access,omitempty"`
 }
 
 type KubernetesNodeGroupDetails struct {
