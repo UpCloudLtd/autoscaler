@@ -32,7 +32,7 @@ spec:
             - /cluster-autoscaler
             - --cloud-provider=upcloud
             - --stderrthreshold=info
-            - --scale-down-enabled=false
+            - --scale-down-enabled=true
             - --v=4
           env:
             - name: UPCLOUD_CLUSTER_ID

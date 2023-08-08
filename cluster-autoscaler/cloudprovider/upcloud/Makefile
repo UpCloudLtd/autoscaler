@@ -1,7 +1,6 @@
 
 UPCLOUD_SDK_PACKAGE ?= github.com/upcloudltd/upcloud-go-api/v6
-# TODO: change to v6.3.2 when released
-UPCLOUD_SDK_VERSION ?= main 
+UPCLOUD_SDK_VERSION ?= v6.5.0
 
 IMAGE_TAG ?= upcloud-autoscaler:0.1-dev
 
