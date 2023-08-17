@@ -19,7 +19,7 @@ spec:
       priorityClassName: system-cluster-critical
       containers:
         - name: cluster-autoscaler
-          image: ${IMAGE_TAG}
+          image: ghcr.io/upcloudltd/autoscaler:latest
           imagePullPolicy: "Always"
           resources:
             limits:
@@ -40,12 +40,12 @@ spec:
             - name: UPCLOUD_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: upcloud
+                  name: upcloud-autoscaler
                   key: username
             - name: UPCLOUD_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: upcloud
+                  name: upcloud-autoscaler
                   key: password
           volumeMounts:
             - name: ssl-certs
