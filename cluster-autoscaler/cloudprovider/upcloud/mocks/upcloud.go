@@ -36,8 +36,17 @@ func (s *UpCloudService) DeleteKubernetesNodeGroupNode(ctx context.Context, r *r
 func (s *UpCloudService) GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error) {
 	for i := range s.NodeGroups {
 		if s.NodeGroups[i].Name == r.Name {
+			nodes := make([]upcloud.KubernetesNode, 0)
+			for z := 0; z < s.NodeGroups[i].Count; z++ {
+				nodes = append(nodes, upcloud.KubernetesNode{
+					UUID:  fmt.Sprintf("%s-%d", r.Name, z),
+					Name:  fmt.Sprintf("%s-node-%d", r.Name, z),
+					State: upcloud.KubernetesNodeStateRunning,
+				})
+			}
 			return &upcloud.KubernetesNodeGroupDetails{
 				KubernetesNodeGroup: s.NodeGroups[i],
+				Nodes:               nodes,
 			}, nil
 		}
 	}

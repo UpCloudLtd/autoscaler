@@ -45,7 +45,7 @@ type upCloudConfig struct {
 
 // UpCloudCloudProvider implements cloudprovide.CloudProvider interfaces
 type UpCloudCloudProvider struct {
-	manager         *Manager
+	manager         *manager
 	resourceLimiter *cloudprovider.ResourceLimiter
 }
 
@@ -122,7 +122,7 @@ func (u *UpCloudCloudProvider) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (u *UpCloudCloudProvider) Refresh() error {
 	klog.V(logDebug).Info("UpCloud CloudProvider.Refresh called")
-	return u.manager.Refresh()
+	return u.manager.refresh()
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.
@@ -161,15 +161,15 @@ func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDisc
 
 	cfg, err := buildCloudConfig(opts)
 	if err != nil {
-		klog.Fatalf("failed to initialize UpCloud config: %w", err)
+		klog.Fatalf("failed to initialize UpCloud config: %v", err)
 	}
 	svc, err := newUpCloudService(cfg)
 	if err != nil {
-		klog.Fatalf("failed to initialize UpCloud service: %w", err)
+		klog.Fatalf("failed to initialize UpCloud service: %v", err)
 	}
 	manager, err := newManager(ctx, svc, cfg, opts)
 	if err != nil {
-		klog.Fatalf("failed to initialize manager: %w", err)
+		klog.Fatalf("failed to initialize manager: %v", err)
 	}
 
 	klog.V(logInfo).Infof("%s cloud provider initialized successfully", opts.CloudProviderName)
