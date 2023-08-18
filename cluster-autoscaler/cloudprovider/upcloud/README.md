@@ -1,12 +1,20 @@
-# Cluster Autoscaler for UpCloud (experimental)
+# Cluster Autoscaler for UpCloud (beta)
 
-This is just experimental implementation and it's not working as intended yet.
+# Overview
 
-## Todo
-- [x] vendor UpCloud Go SDK
-- [x] implement NodeGroup.DeleteNodes() - scaling down is not working
-- [ ] clean up code and fix bugs
-- [ ] add more tests
+Cluster Autoscaler for UpCloud automatically adjusts the size of UKS node groups when one of the following conditions is true: 
+- there are pods that failed to run in the cluster due to insufficient resources.
+- there are nodes in the cluster that have been underutilized for an extended period of time and their pods can be placed on other existing nodes.
+
+Additional info about the Cluster Autoscaler (CA) can be found from the project's [README](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/README.md) file and from the [FAQ](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md) .
+
+Latest Docker image is available at Github package registry
+```shell
+$ docker pull ghcr.io/upcloudltd/autoscaler:latest
+```
+## Disclaimer
+
+Before reaching the **v1.0.0** version, Cluster Autoscaler for UpCloud is **NOT** recommended for production environment usage.
 
 ## Configuration
 ### Required environment variables
@@ -31,7 +39,17 @@ $ docker build -t <image:tag> -f Dockerfile.amd64 .
 ```
 
 ## Deployment
-Update your UKS cluster ID (`UPCLOUD_CLUSTER_ID`) and image TAG (`IMAGE_TAG`) into [examples/cluster-autoscaler.yaml](./examples/cluster-autoscaler.yaml)
+
+### Create a Kubernetes secret
+Execute the following command to add UpCloud credentials as Kubernetes secret:  
+<sub>_Replace `$UPCLOUD_PASSWORD` and `$UPCLOUD_USERNAME` with your UpCloud API credentials if not defined using environment variables._</sub>
+```shell
+$ kubectl -n kube-system create secret generic upcloud-autoscaler --from-literal=password=$UPCLOUD_PASSWORD --from-literal=username=$UPCLOUD_USERNAME
+```
+Note that user `$UPCLOUD_USERNAME` needs to have permission to manage Kubernetes cluster through UpCloud API.
+
+### Deploy Cluster Autoscaler
+Update your UKS cluster ID (`UPCLOUD_CLUSTER_ID`) into [examples/cluster-autoscaler.yaml](./examples/cluster-autoscaler.yaml)
 
 ```shell
 $ kubectl apply -f examples/rbac.yaml
@@ -54,5 +72,5 @@ $ make build
 
 Setup environment variables and run autoscaler binary:
 ```shell
-$ ./cluster-autoscaler-amd64 --address=:8087 --cloud-provider=upcloud --stderrthreshold=info --scale-down-enabled=false --v=4 --kubeconfig=<path to kubeconfig file>
+$ ./cluster-autoscaler-amd64 --address=:8087 --cloud-provider=upcloud --stderrthreshold=info --scale-down-enabled=true --v=4 --kubeconfig=<path to kubeconfig file>
 ```
