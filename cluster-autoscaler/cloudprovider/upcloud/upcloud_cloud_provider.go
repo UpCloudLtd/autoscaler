@@ -155,6 +155,7 @@ func (u *UpCloudCloudProvider) Cleanup() error {
 	return nil
 }
 
+// BuildUpCloud builds UpCloud's cloud provider implementation
 func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutProviderInit)
 	defer cancel()

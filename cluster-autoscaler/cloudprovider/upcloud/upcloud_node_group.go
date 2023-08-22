@@ -16,8 +16,8 @@ import (
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
+// UpCloudNodeGroup implements cloudprovide.NodeGroup interfaces
 type UpCloudNodeGroup struct {
-	// implements cloudprovide.NodeGroup interfaces
 	clusterID uuid.UUID
 	name      string
 	size      int
