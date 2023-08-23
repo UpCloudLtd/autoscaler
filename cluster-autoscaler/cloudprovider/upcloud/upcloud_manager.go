@@ -2,7 +2,9 @@ package upcloud
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -23,7 +25,8 @@ type upCloudService interface {
 	GetKubernetesPlans(ctx context.Context, r *request.GetKubernetesPlansRequest) ([]upcloud.KubernetesPlan, error)
 }
 
-type Manager struct {
+// manager manages node group cache
+type manager struct {
 	clusterID  uuid.UUID
 	svc        upCloudService
 	nodeGroups []*UpCloudNodeGroup
@@ -33,7 +36,8 @@ type Manager struct {
 	mu sync.Mutex
 }
 
-func (m *Manager) Refresh() error {
+// refresh updates manager's node group cache
+func (m *manager) refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
@@ -70,7 +74,7 @@ func (m *Manager) Refresh() error {
 	return nil
 }
 
-func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts config.AutoscalingOptions) (*Manager, error) {
+func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts config.AutoscalingOptions) (*manager, error) {
 	clusterUUID, err := uuid.Parse(cfg.ClusterID)
 	if err != nil {
 		return nil, fmt.Errorf("cluster ID %s is not valid UUID %w", envUpCloudClusterID, err)
@@ -80,7 +84,7 @@ func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{
+	return &manager{
 		clusterID:     clusterUUID,
 		maxNodesTotal: maxNodesTotal,
 		svc:           svc,
@@ -94,6 +98,10 @@ func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUI
 		UUID: clusterID.String(),
 	})
 	if err != nil {
+		var p *upcloud.Problem
+		if err != nil && errors.As(err, &p) && p.Status == http.StatusForbidden {
+			return requestedMaxNodesTotal, fmt.Errorf("unable to get cluster %s info, permission defined", clusterID.String())
+		}
 		return requestedMaxNodesTotal, err
 	}
 
