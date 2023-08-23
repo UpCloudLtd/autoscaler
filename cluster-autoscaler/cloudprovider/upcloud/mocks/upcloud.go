@@ -9,16 +9,20 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
 )
 
+// UpCloudService is mock that implements UpCloudService
 type UpCloudService struct {
 	Clusters   []upcloud.KubernetesCluster
 	Plans      []upcloud.KubernetesPlan
 	NodeGroups []upcloud.KubernetesNodeGroup
 }
 
+// GetKubernetesNodeGroups list node groups
 func (s *UpCloudService) GetKubernetesNodeGroups(ctx context.Context, r *request.GetKubernetesNodeGroupsRequest) ([]upcloud.KubernetesNodeGroup, error) {
 	return s.NodeGroups, nil
 
 }
+
+// ModifyKubernetesNodeGroup modifies the node group
 func (s *UpCloudService) ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error) {
 	for i := range s.NodeGroups {
 		if s.NodeGroups[i].Name == r.Name {
@@ -29,10 +33,12 @@ func (s *UpCloudService) ModifyKubernetesNodeGroup(ctx context.Context, r *reque
 	return nil, fmt.Errorf("node group not found %+v", r)
 }
 
+// DeleteKubernetesNodeGroupNode deletes the node group
 func (s *UpCloudService) DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error {
 	return nil
 }
 
+// GetKubernetesNodeGroup returns node group details
 func (s *UpCloudService) GetKubernetesNodeGroup(ctx context.Context, r *request.GetKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroupDetails, error) {
 	for i := range s.NodeGroups {
 		if s.NodeGroups[i].Name == r.Name {
@@ -53,6 +59,7 @@ func (s *UpCloudService) GetKubernetesNodeGroup(ctx context.Context, r *request.
 	return nil, fmt.Errorf("node group details not found %+v", r)
 }
 
+// GetKubernetesCluster return UKS cluster object
 func (s *UpCloudService) GetKubernetesCluster(ctx context.Context, r *request.GetKubernetesClusterRequest) (*upcloud.KubernetesCluster, error) {
 	for i := range s.Clusters {
 		if s.Clusters[i].UUID == r.UUID {
@@ -62,6 +69,7 @@ func (s *UpCloudService) GetKubernetesCluster(ctx context.Context, r *request.Ge
 	return nil, &upcloud.Problem{Status: http.StatusNotFound}
 }
 
+// GetKubernetesPlans list UKS plans
 func (s *UpCloudService) GetKubernetesPlans(ctx context.Context, r *request.GetKubernetesPlansRequest) ([]upcloud.KubernetesPlan, error) {
 	return s.Plans, nil
 }
