@@ -26,21 +26,21 @@ sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service
 echo "
 package service
 
-type Cloud interface {}
-type Account interface {}
-type Firewall interface {}
-type Host interface {}
-type IPAddress interface {}
-type LoadBalancer interface {}
-type Tag interface {} 
-type Storage interface {} 
-type ObjectStorage interface {}
-type ManagedDatabaseServiceManager interface {}
-type ManagedDatabaseUserManager interface {}
-type ManagedDatabaseLogicalDatabaseManager interface {}
-type Permission interface {}
-type ServerGroup interface {}
-type Server interface {}
+type Cloud interface{}
+type Account interface{}
+type Firewall interface{}
+type Host interface{}
+type IPAddress interface{}
+type LoadBalancer interface{}
+type Tag interface{}
+type Storage interface{}
+type ObjectStorage interface{}
+type ManagedDatabaseServiceManager interface{}
+type ManagedDatabaseUserManager interface{}
+type ManagedDatabaseLogicalDatabaseManager interface{}
+type Permission interface{}
+type ServerGroup interface{}
+type Server interface{}
 " > $sdk_dir/service/stubs.go
 
 find $sdk_dir -name "*.go" -exec sed -i 's#"'${UPCLOUD_SDK_PACKAGE}'#"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/'${UPCLOUD_SDK_PACKAGE}'#gI' {} \;

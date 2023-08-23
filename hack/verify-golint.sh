@@ -40,6 +40,7 @@ excluded_packages=(
   'cluster-autoscaler/cloudprovider/hetzner/hcloud-go'
   'cluster-autoscaler/expander/grpcplugin/protos'
   'cluster-autoscaler/cloudprovider/tencentcloud/tencentcloud-sdk-go'
+  'cluster-autoscaler/cloudprovider/upcloud/pkg'
 )
 
 FIND_PACKAGES='go list ./... '
