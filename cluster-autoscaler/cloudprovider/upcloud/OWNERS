@@ -1,0 +1,6 @@
+approvers:
+# - peknur
+reviewers:
+# - peknur
+labels:
+  - area/provider/upcloud
