@@ -12,9 +12,6 @@ Latest Docker image is available at Github package registry
 ```shell
 $ docker pull ghcr.io/upcloudltd/autoscaler:latest
 ```
-## Disclaimer
-
-Before reaching the **v1.0.0** version, Cluster Autoscaler for UpCloud is **NOT** recommended for production environment usage.
 
 ## Configuration
 ### Required environment variables

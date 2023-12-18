@@ -2,7 +2,7 @@ name: Publish UpCloud Provider
 
 on:
   push:
-    tags: ["v0.*"]
+    tags: ["v*.*.*"]
 
 env:
   REGISTRY: ghcr.io
