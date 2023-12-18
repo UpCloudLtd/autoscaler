@@ -358,6 +358,20 @@ func NewFramework(r Registry, profile *config.KubeSchedulerProfile, stopCh <-cha
 		options.captureProfile(outputProfile)
 	}
 
+	// Cache metric streams for prefilter and filter plugins.
+	for i, pl := range f.preFilterPlugins {
+		f.preFilterPlugins[i] = &instrumentedPreFilterPlugin{
+			PreFilterPlugin: f.preFilterPlugins[i],
+			metric:          metrics.PluginEvaluationTotal.WithLabelValues(pl.Name(), metrics.PreFilter, f.profileName),
+		}
+	}
+	for i, pl := range f.filterPlugins {
+		f.filterPlugins[i] = &instrumentedFilterPlugin{
+			FilterPlugin: f.filterPlugins[i],
+			metric:       metrics.PluginEvaluationTotal.WithLabelValues(pl.Name(), metrics.Filter, f.profileName),
+		}
+	}
+
 	return f, nil
 }
 
@@ -602,19 +616,19 @@ func (f *frameworkImpl) QueueSortFunc() framework.LessFunc {
 // If a non-success status is returned, then the scheduling cycle is aborted.
 func (f *frameworkImpl) RunPreFilterPlugins(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (_ *framework.PreFilterResult, status *framework.Status) {
 	startTime := time.Now()
+	skipPlugins := sets.New[string]()
 	defer func() {
+		state.SkipFilterPlugins = skipPlugins
 		metrics.FrameworkExtensionPointDuration.WithLabelValues(metrics.PreFilter, status.Code().String(), f.profileName).Observe(metrics.SinceInSeconds(startTime))
 	}()
 	var result *framework.PreFilterResult
 	var pluginsWithNodes []string
-	skipPlugins := sets.New[string]()
 	for _, pl := range f.preFilterPlugins {
 		r, s := f.runPreFilterPlugin(ctx, pl, state, pod)
 		if s.IsSkip() {
 			skipPlugins.Insert(pl.Name())
 			continue
 		}
-		metrics.PluginEvaluationTotal.WithLabelValues(pl.Name(), metrics.PreFilter, f.profileName).Inc()
 		if !s.IsSuccess() {
 			s.SetFailedPlugin(pl.Name())
 			if s.IsUnschedulable() {
@@ -634,7 +648,6 @@ func (f *frameworkImpl) RunPreFilterPlugins(ctx context.Context, state *framewor
 			return nil, framework.NewStatus(framework.Unschedulable, msg)
 		}
 	}
-	state.SkipFilterPlugins = skipPlugins
 	return result, nil
 }
 
@@ -732,7 +745,6 @@ func (f *frameworkImpl) RunFilterPlugins(
 		if state.SkipFilterPlugins.Has(pl.Name()) {
 			continue
 		}
-		metrics.PluginEvaluationTotal.WithLabelValues(pl.Name(), metrics.Filter, f.profileName).Inc()
 		if status := f.runFilterPlugin(ctx, pl, state, pod, nodeInfo); !status.IsSuccess() {
 			if !status.IsUnschedulable() {
 				// Filter plugins are not supposed to return any status other than

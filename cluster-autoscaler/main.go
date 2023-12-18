@@ -65,6 +65,9 @@ import (
 	kube_flag "k8s.io/component-base/cli/flag"
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/component-base/config/options"
+	"k8s.io/component-base/logs"
+	logsapi "k8s.io/component-base/logs/api/v1"
+	_ "k8s.io/component-base/logs/json/register"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 )
@@ -232,6 +235,16 @@ var (
 	forceDaemonSets                   = flag.Bool("force-ds", false, "Blocks scale-up of node groups too small for all suitable Daemon Sets pods.")
 )
 
+func isFlagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func createAutoscalingOptions() config.AutoscalingOptions {
 	minCoresTotal, maxCoresTotal, err := parseMinMaxFlag(*coresTotal)
 	if err != nil {
@@ -252,6 +265,17 @@ func createAutoscalingOptions() config.AutoscalingOptions {
 	if *maxDrainParallelismFlag > 1 && !*parallelDrain {
 		klog.Fatalf("Invalid configuration, could not use --max-drain-parallelism > 1 if --parallel-drain is false")
 	}
+
+	// in order to avoid inconsistent deletion thresholds for the legacy planner and the new actuator, the max-empty-bulk-delete,
+	// and max-scale-down-parallelism flags must be set to the same value.
+	if isFlagPassed("max-empty-bulk-delete") && !isFlagPassed("max-scale-down-parallelism") {
+		*maxScaleDownParallelismFlag = *maxEmptyBulkDeleteFlag
+		klog.Warning("The max-empty-bulk-delete flag will be deprecated in k8s version 1.29. Please use max-scale-down-parallelism instead.")
+		klog.Infof("Setting max-scale-down-parallelism to %d, based on the max-empty-bulk-delete value %d", *maxScaleDownParallelismFlag, *maxEmptyBulkDeleteFlag)
+	} else if !isFlagPassed("max-empty-bulk-delete") && isFlagPassed("max-scale-down-parallelism") {
+		*maxEmptyBulkDeleteFlag = *maxScaleDownParallelismFlag
+	}
+
 	return config.AutoscalingOptions{
 		NodeGroupDefaults: config.NodeGroupAutoscalingOptions{
 			ScaleDownUtilizationThreshold:    *scaleDownUtilizationThreshold,
@@ -505,10 +529,24 @@ func main() {
 
 	leaderElection := defaultLeaderElectionConfiguration()
 	leaderElection.LeaderElect = true
-
 	options.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
-	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
+
+	featureGate := utilfeature.DefaultMutableFeatureGate
+	loggingConfig := logsapi.NewLoggingConfiguration()
+
+	if err := logsapi.AddFeatureGates(featureGate); err != nil {
+		klog.Fatalf("Failed to add logging feature flags: %v", err)
+	}
+
+	logsapi.AddFlags(loggingConfig, pflag.CommandLine)
+	featureGate.AddFlag(pflag.CommandLine)
 	kube_flag.InitFlags()
+
+	if err := logsapi.ValidateAndApply(loggingConfig, featureGate); err != nil {
+		klog.Fatalf("Failed to validate and apply logging configuration: %v", err)
+	}
+
+	logs.InitLogs()
 
 	healthCheck := metrics.NewHealthCheck(*maxInactivityTimeFlag, *maxFailingTimeFlag)
 

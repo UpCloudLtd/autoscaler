@@ -386,6 +386,10 @@ func (p *PriorityQueue) addToActiveQ(pInfo *framework.QueuedPodInfo) (bool, erro
 		p.unschedulablePods.addOrUpdate(pInfo)
 		return false, nil
 	}
+	if pInfo.InitialAttemptTimestamp == nil {
+		now := p.clock.Now()
+		pInfo.InitialAttemptTimestamp = &now
+	}
 	if err := p.activeQ.Add(pInfo); err != nil {
 		klog.ErrorS(err, "Error adding pod to the active queue", "pod", klog.KObj(pInfo.Pod))
 		return false, err
@@ -553,9 +557,7 @@ func (p *PriorityQueue) flushBackoffQCompleted() {
 			klog.ErrorS(err, "Unable to pop pod from backoff queue despite backoff completion", "pod", klog.KObj(pod))
 			break
 		}
-		if err := p.activeQ.Add(pInfo); err != nil {
-			klog.ErrorS(err, "Error adding pod to the active queue", "pod", klog.KObj(pInfo.Pod))
-		} else {
+		if added, _ := p.addToActiveQ(pInfo); added {
 			klog.V(5).InfoS("Pod moved to an internal scheduling queue", "pod", klog.KObj(pod), "event", BackoffComplete, "queue", activeQName)
 			metrics.SchedulerQueueIncomingPods.WithLabelValues("active", BackoffComplete).Inc()
 			activated = true
@@ -609,6 +611,10 @@ func (p *PriorityQueue) Pop() (*framework.QueuedPodInfo, error) {
 	pInfo := obj.(*framework.QueuedPodInfo)
 	pInfo.Attempts++
 	p.schedulingCycle++
+
+	// Reset the set of unschedulable plugins for the next attempt.
+	pInfo.UnschedulablePlugins = sets.NewString()
+
 	return pInfo, nil
 }
 
@@ -902,7 +908,7 @@ func (p *PriorityQueue) newQueuedPodInfo(pod *v1.Pod, plugins ...string) *framew
 	return &framework.QueuedPodInfo{
 		PodInfo:                 podInfo,
 		Timestamp:               now,
-		InitialAttemptTimestamp: now,
+		InitialAttemptTimestamp: nil,
 		UnschedulablePlugins:    sets.NewString(plugins...),
 	}
 }
