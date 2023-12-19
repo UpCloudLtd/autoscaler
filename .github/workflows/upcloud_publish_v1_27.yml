@@ -50,12 +50,17 @@ jobs:
           CGO_ENABLED: "0"
         run: go build -ldflags "-w -s" --tags upcloud -o cloudprovider/upcloud/cluster-autoscaler-${{ env.GOARCH }}
 
+      - name: Get CA version
+        id: ca
+        working-directory: cluster-autoscaler/
+        run: echo "ca_version=$(./cloudprovider/upcloud/hack/version.sh)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           file: cluster-autoscaler/Dockerfile.${{ env.GOARCH }}
           context: cluster-autoscaler/cloudprovider/upcloud/
           push: true
-          tags: "ghcr.io/upcloudltd/autoscaler:v1.27"
+          tags: "ghcr.io/upcloudltd/autoscaler:v${{ steps.ca.outputs.ca_version }}"
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
