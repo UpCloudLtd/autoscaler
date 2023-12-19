@@ -1,4 +1,4 @@
-# Cluster Autoscaler for UpCloud (beta)
+# Cluster Autoscaler for UpCloud
 
 # Overview
 
