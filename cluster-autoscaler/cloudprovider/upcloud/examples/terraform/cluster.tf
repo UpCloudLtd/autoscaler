@@ -42,6 +42,9 @@ resource "upcloud_kubernetes_node_group" "autoscaler" {
   node_count = 3
   name       = "group-1"
   plan       = "1xCPU-2GB"
+  lifecycle {
+    ignore_changes = [node_count]
+  }
 }
 
 data "upcloud_kubernetes_cluster" "autoscaler" {
