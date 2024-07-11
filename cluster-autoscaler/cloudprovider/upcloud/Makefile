@@ -15,3 +15,6 @@ vendor:
 
 test:
 	go test -v -trace k8s.io/autoscaler/cloudprovider/upcloud
+
+lint:
+	golangci-lint run
