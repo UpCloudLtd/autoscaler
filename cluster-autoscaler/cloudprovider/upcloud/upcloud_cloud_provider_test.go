@@ -17,6 +17,7 @@ limitations under the License.
 package upcloud
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -32,11 +33,11 @@ import (
 func TestUpCloudCloudProvider_NodeGroups(t *testing.T) {
 	t.Parallel()
 
-	svc := mocks.UpCloudService{}
 	clusterID := uuid.New()
-	p := newUpCloudCloudProvider(clusterID, &svc)
+	svc := newMockService(clusterID)
+	p := newUpCloudCloudProvider(clusterID, svc)
 	require.NoError(t, p.Refresh())
-	svc.NodeGroups = append(svc.NodeGroups, upcloud.KubernetesNodeGroup{Count: 3, Name: "group3"})
+	require.NoError(t, svc.AppendNodeGroup(context.TODO(), clusterID, upcloud.KubernetesNodeGroup{Count: 3, Name: "group3"}))
 	// node group length should still be 2 as refresh is not yet called
 	require.Len(t, p.NodeGroups(), 2)
 	require.NoError(t, p.Refresh())
@@ -46,16 +47,16 @@ func TestUpCloudCloudProvider_NodeGroups(t *testing.T) {
 func TestUpCloudCloudProvider_Name(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 	require.Equal(t, cloudprovider.UpCloudProviderName, p.Name())
 }
 
 func TestUpCloudCloudProvider_NodeGroupForNode(t *testing.T) {
 	t.Parallel()
 
-	svc := mocks.UpCloudService{}
 	clusterID := uuid.New()
-	p := newUpCloudCloudProvider(clusterID, &svc)
+	svc := newMockService(clusterID)
+	p := newUpCloudCloudProvider(clusterID, svc)
 	require.NoError(t, p.Refresh())
 
 	group, err := p.NodeGroupForNode(&v1.Node{
@@ -81,7 +82,7 @@ func TestUpCloudCloudProvider_GetResourceLimiter(t *testing.T) {
 	t.Parallel()
 
 	rl := cloudprovider.NewResourceLimiter(map[string]int64{"min": 1}, nil)
-	p := UpCloudCloudProvider{
+	p := upCloudCloudProvider{
 		manager: &manager{
 			clusterID: uuid.New(),
 		},
@@ -119,28 +120,28 @@ func TestBuildCloudConfig(t *testing.T) {
 func TestUpCloudCloudProvider_GPULabel(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 	require.Empty(t, p.GPULabel())
 }
 
 func TestUpCloudCloudProvider_GetAvailableGPUTypes(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 	require.Nil(t, p.GetAvailableGPUTypes())
 }
 
 func TestUpCloudCloudProvider_Cleanup(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 	require.Nil(t, p.Cleanup())
 }
 
 func TestUpCloudCloudProvider_GetNodeGpuConfig(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 	require.Nil(t, p.GetNodeGpuConfig(&v1.Node{
 		Spec: v1.NodeSpec{
 			ProviderID: fmt.Sprintf("upcloud:////%s", uuid.NewString()),
@@ -151,7 +152,7 @@ func TestUpCloudCloudProvider_GetNodeGpuConfig(t *testing.T) {
 func TestUpCloudCloudProvider_ErrNotImplemented(t *testing.T) {
 	t.Parallel()
 
-	p := UpCloudCloudProvider{}
+	p := upCloudCloudProvider{}
 
 	_, err := p.HasInstance(nil)
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
@@ -166,14 +167,11 @@ func TestUpCloudCloudProvider_ErrNotImplemented(t *testing.T) {
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
-func newUpCloudCloudProvider(clusterID uuid.UUID, svc *mocks.UpCloudService) UpCloudCloudProvider {
+func newUpCloudCloudProvider(clusterID uuid.UUID, svc *mocks.UpCloudService) upCloudCloudProvider {
 	if svc == nil {
 		svc = &mocks.UpCloudService{}
 	}
-	svc.NodeGroups = append(svc.NodeGroups,
-		upcloud.KubernetesNodeGroup{Count: 2, Name: "group1"},
-		upcloud.KubernetesNodeGroup{Count: 3, Name: "group2"})
-	return UpCloudCloudProvider{
+	return upCloudCloudProvider{
 		manager: &manager{
 			clusterID: clusterID,
 			svc:       svc,

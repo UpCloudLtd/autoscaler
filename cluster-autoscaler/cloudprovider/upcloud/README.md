@@ -53,6 +53,29 @@ $ kubectl apply -f examples/rbac.yaml
 $ kubectl apply -f examples/cluster-autoscaler.yaml
 ```
 
+### Customize node group limits
+By default each node group have at least one node and at most the number of nodes that are allowed in selected cluster plan.
+These limits can be customized with `--nodes` command-line argument, using format `<min>:<max>:<node_group_name>`.
+
+For example to make sure that:
+- node group `monitor` has always at least 2 nodes, but never over 10 nodes
+- node group `dev` has always at least 2 nodes, but never over 3 nodes
+- rest of the node groups can scale up and down freely
+
+*Note that CA will not scale __up__ node group automatically to minimum value, minimum value only effects scale __down__ operation.*
+
+```yaml
+command:
+    - /cluster-autoscaler
+    - --cloud-provider=upcloud
+    - --stderrthreshold=info
+    - --scale-down-enabled=true
+    - --v=4
+    - --nodes=2:10:monitor
+    - --nodes=2:3:dev
+```
+
+
 ## Test scaling up
 
 Deploy example app
