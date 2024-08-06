@@ -29,6 +29,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/klog/v2"
 )
 
@@ -43,9 +44,10 @@ type upCloudService interface {
 
 // manager manages node group cache
 type manager struct {
-	clusterID  uuid.UUID
-	svc        upCloudService
-	nodeGroups []*UpCloudNodeGroup
+	clusterID      uuid.UUID
+	svc            upCloudService
+	nodeGroups     []*upCloudNodeGroup
+	nodeGroupSpecs map[string]dynamic.NodeGroupSpec
 
 	maxNodesTotal int
 
@@ -58,7 +60,7 @@ func (m *manager) refresh() error {
 	defer m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
 	defer cancel()
-	groups := make([]*UpCloudNodeGroup, 0)
+	groups := make([]*upCloudNodeGroup, 0)
 	upcloudNodeGroups, err := m.svc.GetKubernetesNodeGroups(ctx, &request.GetKubernetesNodeGroupsRequest{
 		ClusterUUID: m.clusterID.String(),
 	})
@@ -71,7 +73,7 @@ func (m *manager) refresh() error {
 			klog.ErrorS(err, "failed to get node group nodes")
 			continue
 		}
-		group := UpCloudNodeGroup{
+		group := upCloudNodeGroup{
 			clusterID: m.clusterID,
 			name:      g.Name,
 			size:      g.Count,
@@ -80,6 +82,10 @@ func (m *manager) refresh() error {
 			svc:       m.svc,
 			nodes:     nodes,
 			mu:        sync.Mutex{},
+		}
+		if spec, ok := m.nodeGroupSpecs[group.name]; ok && spec.Name == group.name {
+			group.minSize = spec.MinSize
+			group.maxSize = spec.MaxSize
 		}
 		klog.V(logInfo).Infof("caching cluster %s node group %s size=%d minSize=%d maxSize=%d nodes=%d",
 			m.clusterID.String(), group.name, group.size, group.minSize, group.maxSize, len(nodes))
@@ -90,7 +96,7 @@ func (m *manager) refresh() error {
 	return nil
 }
 
-func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts config.AutoscalingOptions) (*manager, error) {
+func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions) (*manager, error) {
 	clusterUUID, err := uuid.Parse(cfg.ClusterID)
 	if err != nil {
 		return nil, fmt.Errorf("cluster ID %s is not valid UUID %w", envUpCloudClusterID, err)
@@ -100,13 +106,37 @@ func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts
 	if err != nil {
 		return nil, err
 	}
+	nodeGroupSpecs, err := nodeGroupSpecsFromDiscoveryOptions(&do, nodeGroupMinSize == 0, maxNodesTotal)
+	if err != nil {
+		return nil, err
+	}
+
 	return &manager{
-		clusterID:     clusterUUID,
-		maxNodesTotal: maxNodesTotal,
-		svc:           svc,
-		nodeGroups:    make([]*UpCloudNodeGroup, 0),
-		mu:            sync.Mutex{},
+		clusterID:      clusterUUID,
+		maxNodesTotal:  maxNodesTotal,
+		svc:            svc,
+		nodeGroups:     make([]*upCloudNodeGroup, 0),
+		nodeGroupSpecs: nodeGroupSpecs,
+		mu:             sync.Mutex{},
 	}, nil
+}
+
+func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOptions, supportScaleToZero bool, maxNodesTotal int) (map[string]dynamic.NodeGroupSpec, error) {
+	specs := make(map[string]dynamic.NodeGroupSpec)
+	if do == nil || len(do.NodeGroupSpecs) == 0 {
+		return specs, nil
+	}
+	for _, spec := range do.NodeGroupSpecs {
+		s, err := dynamic.SpecFromString(spec, supportScaleToZero)
+		if err != nil {
+			return specs, fmt.Errorf("failed to parse node group spec, format should be `<minSize>:<maxSize>:<nodeGroupName>`: %v", err)
+		}
+		if s.MaxSize > maxNodesTotal {
+			return specs, fmt.Errorf("failed to validate node group spec, max size %d is greater than cluster plan maximum %d`", s.MaxSize, maxNodesTotal)
+		}
+		specs[s.Name] = *s
+	}
+	return specs, nil
 }
 
 func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUID, requestedMaxNodesTotal int) (int, error) {
@@ -115,10 +145,15 @@ func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUI
 	})
 	if err != nil {
 		var p *upcloud.Problem
-		if err != nil && errors.As(err, &p) && p.Status == http.StatusForbidden {
-			return requestedMaxNodesTotal, fmt.Errorf("unable to get cluster %s info, permission defined", clusterID.String())
+		if !errors.As(err, &p) {
+			return requestedMaxNodesTotal, err
 		}
-		return requestedMaxNodesTotal, err
+		if p.Status == http.StatusForbidden {
+			return requestedMaxNodesTotal, fmt.Errorf("unable to get cluster %s info, permission denied", clusterID.String())
+		}
+		if p.Status == http.StatusNotFound {
+			return requestedMaxNodesTotal, fmt.Errorf("cluster %s not found", clusterID.String())
+		}
 	}
 
 	plan, err := clusterPlanByName(ctx, svc, cluster.Plan)
