@@ -159,3 +159,10 @@ func TestUpCloudNodeGroup_TemplateNodeInfo(t *testing.T) {
 	_, err := g.TemplateNodeInfo()
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
+
+func TestUpCloudNodeGroup_AtomicIncreaseSize(t *testing.T) {
+	t.Parallel()
+
+	g := &upCloudNodeGroup{}
+	require.ErrorIs(t, g.AtomicIncreaseSize(1), cloudprovider.ErrNotImplemented)
+}

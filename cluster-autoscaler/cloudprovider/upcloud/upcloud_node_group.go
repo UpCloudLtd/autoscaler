@@ -249,3 +249,17 @@ func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, err
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
 	return nil, cloudprovider.ErrNotImplemented
 }
+
+// AtomicIncreaseSize tries to increase the size of the node group atomically.
+//   - If the method returns nil, it guarantees that delta instances will be added to the node group
+//     within its MaxNodeProvisionTime. The function should wait until node group size is updated.
+//     The cloud provider is responsible for tracking and ensuring successful scale up asynchronously.
+//   - If the method returns an error, it guarantees that no new instances will be added to the node group
+//     as a result of this call. The cloud provider is responsible for ensuring that before returning from the method.
+//
+// Implementation is optional. If implemented, CA will take advantage of the method while scaling up
+// GenericScaleUp ProvisioningClass, guaranteeing that all instances required for such a ProvisioningRequest
+// are provisioned atomically.
+func (u *upCloudNodeGroup) AtomicIncreaseSize(_ int) error {
+	return cloudprovider.ErrNotImplemented
+}
