@@ -1,0 +1,66 @@
+name: Publish UpCloud Provider (CA v1.28)
+
+on:
+  push:
+    branches:
+      - "feat/cluster-autoscaler-cloudprovider-upcloud-1.28"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  GOOS: linux
+  GOARCH: amd64
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: feat/cluster-autoscaler-cloudprovider-upcloud-1.28
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GH_USER }}
+          password: ${{ secrets.GH_PAT }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v2
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Set go environment
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
+
+      - name: Build Go binary
+        working-directory: cluster-autoscaler/
+        env:
+          GOOS: ${{ env.GOOS }}
+          GOARCH: ${{ env.GOARCH }}
+          CGO_ENABLED: "0"
+        run: go build -ldflags "-w -s" --tags upcloud -o cloudprovider/upcloud/cluster-autoscaler-${{ env.GOARCH }}
+
+      - name: Get CA version
+        id: ca
+        working-directory: cluster-autoscaler/
+        run: echo "ca_version=$(./cloudprovider/upcloud/hack/version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          file: cluster-autoscaler/Dockerfile.${{ env.GOARCH }}
+          context: cluster-autoscaler/cloudprovider/upcloud/
+          push: true
+          tags: "ghcr.io/upcloudltd/autoscaler:v${{ steps.ca.outputs.ca_version }}"
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
