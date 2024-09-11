@@ -17,6 +17,7 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 | Kubernetes Version | Image
 |--------------------|------
+| 1.29.x             | ghcr.io/upcloudltd/autoscaler:v1.29.4
 | 1.28.x             | ghcr.io/upcloudltd/autoscaler:v1.28.6
 | 1.27.X             | ghcr.io/upcloudltd/autoscaler:v1.27.8
 
