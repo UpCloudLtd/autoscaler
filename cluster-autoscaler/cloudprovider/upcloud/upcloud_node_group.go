@@ -24,9 +24,11 @@ import (
 
 	"github.com/google/uuid"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/request"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/klog/v2"
 	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
@@ -39,6 +41,10 @@ type upCloudNodeGroup struct {
 	size      int
 	minSize   int
 	maxSize   int
+
+	plan   upcloud.Plan
+	taints []upcloud.KubernetesTaint
+	labels []upcloud.Label
 
 	nodes []cloudprovider.Instance
 	svc   upCloudService
@@ -247,7 +253,75 @@ func (u *upCloudNodeGroup) Exist() bool {
 // the node by default, using manifest (most likely only kube-proxy). Implementation optional.
 func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
-	return nil, cloudprovider.ErrNotImplemented
+
+	// TODO: FIX LATER
+	if u.size > 0 {
+		return nil, cloudprovider.ErrNotImplemented
+	}
+
+	cpuQuantity := resource.NewQuantity(int64(u.plan.CoreNumber*1000), resource.DecimalSI)
+	memoryQuantity := resource.NewQuantity(int64(u.plan.MemoryAmount*1024*1024), resource.BinarySI)
+	podsQuantity := resource.NewQuantity(int64(110), resource.DecimalSI)
+
+	var ephemeralStorageQuantity *resource.Quantity
+	if u.plan.MemoryAmount > 0 {
+		ephemeralStorageQuantity = resource.NewQuantity(int64(u.plan.MemoryAmount*1024*1024), resource.BinarySI)
+	} else {
+		ephemeralStorageQuantity = resource.NewQuantity(int64(21559343316992), resource.BinarySI)
+	}
+
+	labels := make(map[string]string, len(u.labels))
+	for i := range u.labels {
+		labels[u.labels[i].Key] = u.labels[i].Value
+	}
+
+	tains := make([]apiv1.Taint, len(u.taints))
+	for i := range u.taints {
+		tains = append(tains, apiv1.Taint{
+			Effect: apiv1.TaintEffect(u.taints[i].Effect),
+			Key:    u.taints[i].Key,
+			Value:  u.taints[i].Value,
+		})
+	}
+
+	resourceList := apiv1.ResourceList{
+		apiv1.ResourceCPU:              *cpuQuantity,
+		apiv1.ResourceMemory:           *memoryQuantity,
+		apiv1.ResourcePods:             *podsQuantity,
+		apiv1.ResourceEphemeralStorage: *ephemeralStorageQuantity,
+	}
+
+	nodeInfo := schedulerframework.NodeInfo{
+		Requested: &schedulerframework.Resource{
+			MilliCPU: resource.NewQuantity(100, resource.DecimalSI).MilliValue(),
+			Memory:   resource.NewQuantity(100*1024*1024, resource.BinarySI).Value(),
+		},
+		Allocatable: &schedulerframework.Resource{
+			MilliCPU:         cpuQuantity.Value(),
+			Memory:           memoryQuantity.Value(),
+			AllowedPodNumber: int(podsQuantity.Value()),
+			EphemeralStorage: ephemeralStorageQuantity.Value(),
+		},
+	}
+
+	node := apiv1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   fmt.Sprintf("upcloud-template-%s", u.name),
+			Labels: labels,
+		},
+		Spec: apiv1.NodeSpec{
+			ProviderID: fmt.Sprintf("upcloud:////%s", u.name),
+			Taints:     tains,
+		},
+		Status: apiv1.NodeStatus{
+			Allocatable: resourceList,
+			Capacity:    resourceList,
+		},
+	}
+
+	nodeInfo.SetNode(&node)
+
+	return &nodeInfo, nil
 }
 
 // AtomicIncreaseSize tries to increase the size of the node group atomically.

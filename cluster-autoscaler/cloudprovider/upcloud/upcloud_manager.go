@@ -26,8 +26,8 @@ import (
 
 	"github.com/google/uuid"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/request"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/klog/v2"
@@ -40,6 +40,7 @@ type upCloudService interface {
 	ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
 	DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error
 	GetKubernetesPlans(ctx context.Context, r *request.GetKubernetesPlansRequest) ([]upcloud.KubernetesPlan, error)
+	GetPlans(ctx context.Context) (*upcloud.Plans, error)
 }
 
 // manager manages node group cache
@@ -73,6 +74,11 @@ func (m *manager) refresh() error {
 			klog.ErrorS(err, "failed to get node group nodes")
 			continue
 		}
+		plan, err := nodeGroupPlan(m.svc, m.clusterID, g.Name, g.Plan)
+		if err != nil {
+			klog.ErrorS(err, "failed to get node group plan")
+			continue
+		}
 		group := upCloudNodeGroup{
 			clusterID: m.clusterID,
 			name:      g.Name,
@@ -81,6 +87,9 @@ func (m *manager) refresh() error {
 			maxSize:   m.maxNodesTotal,
 			svc:       m.svc,
 			nodes:     nodes,
+			plan:      plan,
+			taints:    g.Taints,
+			labels:    g.Labels,
 			mu:        sync.Mutex{},
 		}
 		if spec, ok := m.nodeGroupSpecs[group.name]; ok && spec.Name == group.name {
@@ -203,6 +212,24 @@ func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]clo
 		})
 	}
 	return instances, err
+}
+
+func nodeGroupPlan(svc upCloudService, clusterID uuid.UUID, name string, planName string) (upcloud.Plan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
+	defer cancel()
+	klog.V(logInfo).Infof("fetching node group %s/%s plan %s", clusterID.String(), name, planName)
+	plans, err := svc.GetPlans(ctx)
+	if err != nil {
+		return upcloud.Plan{}, err
+	}
+
+	for _, plan := range plans.Plans {
+		if plan.Name == planName {
+			return plan, nil
+		}
+	}
+
+	return upcloud.Plan{}, fmt.Errorf("node group %s/%s plan %s not found", clusterID.String(), name, planName)
 }
 
 func nodeStateToInstanceStatus(nodeState upcloud.KubernetesNodeState) *cloudprovider.InstanceStatus {

@@ -26,7 +26,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/mocks"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
@@ -37,7 +37,7 @@ func TestUpCloudCloudProvider_NodeGroups(t *testing.T) {
 	svc := newMockService(clusterID)
 	p := newUpCloudCloudProvider(clusterID, svc)
 	require.NoError(t, p.Refresh())
-	require.NoError(t, svc.AppendNodeGroup(context.TODO(), clusterID, upcloud.KubernetesNodeGroup{Count: 3, Name: "group3"}))
+	require.NoError(t, svc.AppendNodeGroup(context.TODO(), clusterID, upcloud.KubernetesNodeGroup{Count: 3, Name: "group3", Plan: "dev-1"}))
 	// node group length should still be 2 as refresh is not yet called
 	require.Len(t, p.NodeGroups(), 2)
 	require.NoError(t, p.Refresh())

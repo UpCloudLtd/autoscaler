@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/mocks"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 )
@@ -97,11 +97,13 @@ func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
 						Count: 2,
 						Name:  "group1",
 						State: upcloud.KubernetesNodeGroupStateRunning,
+						Plan:  "dev-1",
 					},
 					{
 						Count: 3,
 						Name:  "group2",
 						State: upcloud.KubernetesNodeGroupStateRunning,
+						Plan:  "dev-2",
 					},
 				},
 			},
@@ -110,5 +112,19 @@ func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
 			Name:     "dev",
 			MaxNodes: 20,
 		}},
+		NodePlans: []upcloud.Plan{
+			{
+				Name:         "dev-1",
+				CoreNumber:   2,
+				MemoryAmount: 2048,
+				StorageSize:  30,
+			},
+			{
+				Name:         "dev-2",
+				CoreNumber:   2,
+				MemoryAmount: 2048,
+				StorageSize:  0,
+			},
+		},
 	}
 }
