@@ -23,9 +23,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 func TestUpCloudNodeGroup_Id(t *testing.T) {
@@ -152,12 +155,90 @@ func TestUpCloudNodeGroup_Exist(t *testing.T) {
 	require.True(t, g.Exist())
 }
 
-func TestUpCloudNodeGroup_TemplateNodeInfo(t *testing.T) {
+func TestUpCloudNodeGroup_TemplateNodeInfoWithNonEmptyGroup(t *testing.T) {
 	t.Parallel()
 
-	g := &upCloudNodeGroup{}
-	_, err := g.TemplateNodeInfo()
+	g := &upCloudNodeGroup{
+		size: 1,
+	}
+	n, err := g.TemplateNodeInfo()
+	require.Nil(t, n)
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
+}
+
+func TestUpCloudNodeGroup_TemplateNodeInfoWithEmptyGroup(t *testing.T) {
+	t.Parallel()
+
+	emptyGroup := &upCloudNodeGroup{
+		name: "test-1",
+		size: 0,
+		labels: []upcloud.Label{
+			{
+				Key:   "test-label",
+				Value: "test-label-value",
+			},
+		},
+		taints: []upcloud.KubernetesTaint{
+			{
+				Effect: "NoSchedule",
+				Key:    "foo",
+				Value:  "bar",
+			},
+		},
+		plan: upcloud.Plan{
+			CoreNumber:   1,
+			MemoryAmount: 2048,
+			StorageSize:  30,
+		},
+	}
+	n, err := emptyGroup.TemplateNodeInfo()
+	require.NoError(t, err)
+
+	expectedResources := v1.ResourceList{
+		v1.ResourceCPU:              *resource.NewQuantity(1000, resource.DecimalSI),
+		v1.ResourceMemory:           *resource.NewQuantity(2048*1024*1024, resource.BinarySI),
+		v1.ResourcePods:             *resource.NewQuantity(int64(nodeMaxPods), resource.DecimalSI),
+		v1.ResourceEphemeralStorage: *resource.NewQuantity(30*1024*1024, resource.BinarySI),
+	}
+
+	expectedNode := v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "upcloud-template-test-1",
+			Labels: map[string]string{
+				"test-label": "test-label-value",
+			},
+		},
+		Spec: v1.NodeSpec{
+			ProviderID: "upcloud:////test-1",
+			Taints: []v1.Taint{
+				{
+					Effect: "NoSchedule",
+					Key:    "foo",
+					Value:  "bar",
+				},
+			},
+		},
+		Status: v1.NodeStatus{
+			Allocatable: expectedResources,
+			Capacity:    expectedResources,
+		},
+	}
+	expectedNodeInfo := framework.NodeInfo{
+		Requested: &framework.Resource{
+			MilliCPU: resource.NewQuantity(100, resource.DecimalSI).MilliValue(),
+			Memory:   resource.NewQuantity(100*1024*1024, resource.BinarySI).Value(),
+		},
+		Allocatable: &framework.Resource{
+			MilliCPU:         1000,
+			Memory:           2147483648,
+			EphemeralStorage: 31457280,
+		},
+	}
+
+	expectedNodeInfo.SetNode(&expectedNode)
+	expectedNodeInfo.Generation = 1
+
+	require.Equal(t, &expectedNodeInfo, n)
 }
 
 func TestUpCloudNodeGroup_AtomicIncreaseSize(t *testing.T) {

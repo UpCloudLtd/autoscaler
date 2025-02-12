@@ -31,15 +31,14 @@ sdk_download () {
     curl -sO --output-dir $1 $2
 }
 
-sdk_download $sdk_dir "${sdk_url}/upcloud/{kubernetes.go,problem.go,utils.go,label.go,ip_address.go,network.go}"
+sdk_download $sdk_dir "${sdk_url}/upcloud/{kubernetes.go,problem.go,utils.go,label.go,ip_address.go,network.go,plan.go,price.go,timezone.go,zone.go}"
 sdk_download $sdk_dir/client "${sdk_url}/upcloud/client/{client,error}.go"
 sdk_download $sdk_dir/request "${sdk_url}/upcloud/request/{kubernetes.go,request.go,network.go}"
-sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service.go,network.go}"
+sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service.go,network.go,cloud.go}"
 
 echo "
 package service
 
-type Cloud interface{}
 type Account interface{}
 type Firewall interface{}
 type Host interface{}

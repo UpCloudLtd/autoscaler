@@ -41,8 +41,10 @@ const (
 	timeoutDeleteNode           time.Duration = time.Second * 20
 	timeoutWaitNodeGroupState   time.Duration = time.Minute * 20
 
-	nodeGroupMinSize int = 1
+	nodeGroupMinSize int = 0
 	nodeGroupMaxSize int = 20
+
+	nodeMaxPods int = 110
 
 	logInfo  klog.Level = 4
 	logDebug klog.Level = 5

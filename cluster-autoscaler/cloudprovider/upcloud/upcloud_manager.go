@@ -40,6 +40,7 @@ type upCloudService interface {
 	ModifyKubernetesNodeGroup(ctx context.Context, r *request.ModifyKubernetesNodeGroupRequest) (*upcloud.KubernetesNodeGroup, error)
 	DeleteKubernetesNodeGroupNode(ctx context.Context, r *request.DeleteKubernetesNodeGroupNodeRequest) error
 	GetKubernetesPlans(ctx context.Context, r *request.GetKubernetesPlansRequest) ([]upcloud.KubernetesPlan, error)
+	GetPlans(ctx context.Context) (*upcloud.Plans, error)
 }
 
 // manager manages node group cache
@@ -73,6 +74,11 @@ func (m *manager) refresh() error {
 			klog.ErrorS(err, "failed to get node group nodes")
 			continue
 		}
+		plan, err := nodeGroupPlan(m.svc, m.clusterID, g.Name, g.Plan)
+		if err != nil {
+			klog.ErrorS(err, "failed to get node group plan")
+			continue
+		}
 		group := upCloudNodeGroup{
 			clusterID: m.clusterID,
 			name:      g.Name,
@@ -81,6 +87,9 @@ func (m *manager) refresh() error {
 			maxSize:   m.maxNodesTotal,
 			svc:       m.svc,
 			nodes:     nodes,
+			plan:      plan,
+			taints:    g.Taints,
+			labels:    g.Labels,
 			mu:        sync.Mutex{},
 		}
 		if spec, ok := m.nodeGroupSpecs[group.name]; ok && spec.Name == group.name {
@@ -126,6 +135,7 @@ func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOpti
 	if do == nil || len(do.NodeGroupSpecs) == 0 {
 		return specs, nil
 	}
+
 	for _, spec := range do.NodeGroupSpecs {
 		s, err := dynamic.SpecFromString(spec, supportScaleToZero)
 		if err != nil {
@@ -136,7 +146,23 @@ func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOpti
 		}
 		specs[s.Name] = *s
 	}
+
+	if !leastOneNodeGroupAlwaysHasNodes(&specs) {
+		return specs, fmt.Errorf("failed to validate node group specs, at least one node group must have min size > 0")
+	}
+
 	return specs, nil
+}
+
+// UpCloud cluster auto-scaler is running top of cluster worker nodes
+// There needs to be least one node group with MinSize > 0
+func leastOneNodeGroupAlwaysHasNodes(nodeGroupSpecs *map[string]dynamic.NodeGroupSpec) bool {
+	for _, spec := range *nodeGroupSpecs {
+		if spec.MinSize > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUID, requestedMaxNodesTotal int) (int, error) {
@@ -203,6 +229,24 @@ func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]clo
 		})
 	}
 	return instances, err
+}
+
+func nodeGroupPlan(svc upCloudService, clusterID uuid.UUID, name string, planName string) (upcloud.Plan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
+	defer cancel()
+	klog.V(logInfo).Infof("fetching node group %s/%s plan %s", clusterID.String(), name, planName)
+	plans, err := svc.GetPlans(ctx)
+	if err != nil {
+		return upcloud.Plan{}, err
+	}
+
+	for _, plan := range plans.Plans {
+		if plan.Name == planName {
+			return plan, nil
+		}
+	}
+
+	return upcloud.Plan{}, fmt.Errorf("node group %s/%s plan %s not found", clusterID.String(), name, planName)
 }
 
 func nodeStateToInstanceStatus(nodeState upcloud.KubernetesNodeState) *cloudprovider.InstanceStatus {

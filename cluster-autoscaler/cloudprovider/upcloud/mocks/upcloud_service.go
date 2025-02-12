@@ -29,10 +29,11 @@ import (
 
 // UpCloudService is mock that implements UpCloudService
 type UpCloudService struct {
-	Clusters map[string]upcloud.KubernetesCluster
-	Plans    []upcloud.KubernetesPlan
-	nodes    map[string][]upcloud.KubernetesNode
-	mu       sync.Mutex
+	Clusters  map[string]upcloud.KubernetesCluster
+	Plans     []upcloud.KubernetesPlan
+	nodes     map[string][]upcloud.KubernetesNode
+	NodePlans []upcloud.Plan
+	mu        sync.Mutex
 }
 
 // GetKubernetesNodeGroups list node groups
@@ -153,4 +154,8 @@ func (s *UpCloudService) AppendNodeGroup(ctx context.Context, clusterID uuid.UUI
 	cluster.NodeGroups = append(cluster.NodeGroups, group)
 	s.Clusters[clusterID.String()] = *cluster
 	return nil
+}
+
+func (s *UpCloudService) GetPlans(ctx context.Context) (*upcloud.Plans, error) {
+	return &upcloud.Plans{Plans: s.NodePlans}, nil
 }

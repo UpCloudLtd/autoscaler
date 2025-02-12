@@ -74,16 +74,37 @@ func TestManager(t *testing.T) {
 		upCfg,
 		config.AutoscalingOptions{},
 		cloudprovider.NodeGroupDiscoveryOptions{
-			NodeGroupSpecs: []string{"1:2:one", "11:20:two"},
+			NodeGroupSpecs: []string{"1:2:one", "11:20:two", "0:10:three"},
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, upCfg.ClusterID, m.clusterID.String())
-	require.Equal(t, dynamic.NodeGroupSpec{Name: "one", MinSize: 1, MaxSize: 2}, m.nodeGroupSpecs["one"])
-	require.Equal(t, dynamic.NodeGroupSpec{Name: "two", MinSize: 11, MaxSize: 20}, m.nodeGroupSpecs["two"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "one", MinSize: 1, MaxSize: 2, SupportScaleToZero: true}, m.nodeGroupSpecs["one"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "two", MinSize: 11, MaxSize: 20, SupportScaleToZero: true}, m.nodeGroupSpecs["two"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "three", MinSize: 0, MaxSize: 10, SupportScaleToZero: true}, m.nodeGroupSpecs["three"])
 	require.NoError(t, m.refresh())
 	require.Positive(t, len(m.nodeGroups))
 	require.Equal(t, len(svc.Clusters[clusterID.String()].NodeGroups), len(m.nodeGroups))
+}
+
+func TestScaleDownToZeroNotPossibleWithOneNodeGroup(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	upCfg := upCloudConfig{ClusterID: clusterID.String()}
+	svc := newMockService(clusterID)
+
+	m, err := newManager(
+		context.Background(),
+		svc,
+		upCfg,
+		config.AutoscalingOptions{},
+		cloudprovider.NodeGroupDiscoveryOptions{
+			NodeGroupSpecs: []string{"0:10:one"},
+		},
+	)
+	require.Nil(t, m)
+	require.Error(t, err, "failed to validate node group specs, at least one node group must have min size > 0")
 }
 
 func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
@@ -97,11 +118,13 @@ func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
 						Count: 2,
 						Name:  "group1",
 						State: upcloud.KubernetesNodeGroupStateRunning,
+						Plan:  "dev-1",
 					},
 					{
 						Count: 3,
 						Name:  "group2",
 						State: upcloud.KubernetesNodeGroupStateRunning,
+						Plan:  "dev-2",
 					},
 				},
 			},
@@ -110,5 +133,19 @@ func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
 			Name:     "dev",
 			MaxNodes: 20,
 		}},
+		NodePlans: []upcloud.Plan{
+			{
+				Name:         "dev-1",
+				CoreNumber:   2,
+				MemoryAmount: 2048,
+				StorageSize:  30,
+			},
+			{
+				Name:         "dev-2",
+				CoreNumber:   2,
+				MemoryAmount: 2048,
+				StorageSize:  0,
+			},
+		},
 	}
 }
