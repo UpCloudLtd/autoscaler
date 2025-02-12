@@ -115,7 +115,7 @@ func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts
 	if err != nil {
 		return nil, err
 	}
-	nodeGroupSpecs, err := nodeGroupSpecsFromDiscoveryOptions(&do, nodeGroupMinSize == 0, maxNodesTotal)
+	nodeGroupSpecs, err := nodeGroupSpecsFromDiscoveryOptions(&do, maxNodesTotal)
 	if err != nil {
 		return nil, err
 	}
@@ -130,13 +130,14 @@ func newManager(ctx context.Context, svc upCloudService, cfg upCloudConfig, opts
 	}, nil
 }
 
-func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOptions, supportScaleToZero bool, maxNodesTotal int) (map[string]dynamic.NodeGroupSpec, error) {
+func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOptions, maxNodesTotal int) (map[string]dynamic.NodeGroupSpec, error) {
 	specs := make(map[string]dynamic.NodeGroupSpec)
 	if do == nil || len(do.NodeGroupSpecs) == 0 {
 		return specs, nil
 	}
+
 	for _, spec := range do.NodeGroupSpecs {
-		s, err := dynamic.SpecFromString(spec, supportScaleToZero)
+		s, err := dynamic.SpecFromString(spec, len(do.NodeGroupSpecs) > 1)
 		if err != nil {
 			return specs, fmt.Errorf("failed to parse node group spec, format should be `<minSize>:<maxSize>:<nodeGroupName>`: %v", err)
 		}
@@ -145,7 +146,34 @@ func nodeGroupSpecsFromDiscoveryOptions(do *cloudprovider.NodeGroupDiscoveryOpti
 		}
 		specs[s.Name] = *s
 	}
+
+	setScaleToZeroForNodeGroups(specs)
+
 	return specs, nil
+}
+
+func setScaleToZeroForNodeGroups(nodeGroupSpecs map[string]dynamic.NodeGroupSpec) {
+	scaleToZero := isScaleToZeroEnabled(&nodeGroupSpecs)
+	for groupName, spec := range nodeGroupSpecs {
+		if scaleToZero && spec.MinSize == 0 {
+			spec.SupportScaleToZero = true
+		} else {
+			spec.SupportScaleToZero = false
+		}
+
+		nodeGroupSpecs[groupName] = spec
+	}
+}
+
+// UpCloud cluster auto-scaler is running top of cluster worker nodes
+// In order to enable scaling to zero make sure we have at least one worker node group with minSize > 0
+func isScaleToZeroEnabled(nodeGroupSpecs *map[string]dynamic.NodeGroupSpec) bool {
+	for _, spec := range *nodeGroupSpecs {
+		if spec.MinSize > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func clusterMaxNodes(ctx context.Context, svc upCloudService, clusterID uuid.UUID, requestedMaxNodesTotal int) (int, error) {
