@@ -34,7 +34,7 @@ sdk_download () {
 sdk_download $sdk_dir "${sdk_url}/upcloud/{kubernetes.go,problem.go,utils.go,label.go,ip_address.go,network.go,plan.go,price.go,storage.go,timezone.go,zone.go}"
 sdk_download $sdk_dir/client "${sdk_url}/upcloud/client/{client,error}.go"
 sdk_download $sdk_dir/request "${sdk_url}/upcloud/request/{kubernetes.go,request.go,network.go}"
-sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service.go,network.go,cloud.go,retry.go}"
+sdk_download $sdk_dir/service "${sdk_url}/upcloud/service/{kubernetes.go,service.go,network.go,cloud.go}"
 
 echo "
 package service

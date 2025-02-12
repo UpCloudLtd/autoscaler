@@ -3,13 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/client"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/client"
 )
 
 type Client interface {
@@ -49,9 +47,6 @@ type service interface {
 	ManagedDatabaseLogicalDatabaseManager
 	Permission
 	Kubernetes
-	ManagedObjectStorage
-	Gateway
-	Partner
 }
 
 var _ service = (*Service)(nil)
@@ -67,21 +62,10 @@ func (s *Service) get(ctx context.Context, location string, v interface{}) error
 	if err != nil {
 		return parseJSONServiceError(err)
 	}
-
 	if v == nil {
 		return nil
 	}
-
-	err = json.Unmarshal(res, v)
-	if err == nil {
-		return nil
-	}
-
-	if strings.HasPrefix(err.Error(), "json: cannot unmarshal array") {
-		return errors.Join(err, errors.New("get: request parameters might be incorrect, ensure that required fields, such as UUID, are set to valid values"))
-	}
-
-	return err
+	return json.Unmarshal(res, v)
 }
 
 // Create performs a POST request to the specified location with context and stores the response in the value pointed to by v.

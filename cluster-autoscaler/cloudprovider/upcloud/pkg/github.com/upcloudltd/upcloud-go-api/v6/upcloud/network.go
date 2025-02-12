@@ -2,15 +2,11 @@ package upcloud
 
 import "encoding/json"
 
-type RouterStaticRouteType string
-
+// Constants
 const (
 	NetworkTypePrivate = "private"
 	NetworkTypePublic  = "public"
 	NetworkTypeUtility = "utility"
-
-	RouterStaticRouteTypeService RouterStaticRouteType = "service"
-	RouterStaticRouteTypeUser    RouterStaticRouteType = "user"
 )
 
 // ServerInterface represent a network interface on the server
@@ -94,7 +90,6 @@ type IPNetwork struct {
 	DHCP             Boolean  `json:"dhcp"`
 	DHCPDefaultRoute Boolean  `json:"dhcp_default_route"`
 	DHCPDns          []string `json:"dhcp_dns,omitempty"`
-	DHCPRoutes       []string `json:"dhcp_routes,omitempty"`
 	Family           string   `json:"family,omitempty"`
 	Gateway          string   `json:"gateway,omitempty"`
 }
@@ -297,15 +292,6 @@ type Router struct {
 	Type             string             `json:"type"`
 	UUID             string             `json:"uuid"`
 	Labels           []Label            `json:"labels"`
-	StaticRoutes     []StaticRoute      `json:"static_routes"`
-}
-
-// StaticRoute represents a Static route
-type StaticRoute struct {
-	Name    string                `json:"name,omitempty"`
-	Route   string                `json:"route"`
-	Nexthop string                `json:"nexthop"`
-	Type    RouterStaticRouteType `json:"type,omitempty"`
 }
 
 // UnmarshalJSON is a custom unmarshaller that deals with

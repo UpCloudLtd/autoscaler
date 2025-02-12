@@ -84,10 +84,6 @@ func BoolPtr(v bool) *bool {
 	return &v
 }
 
-func Float64Ptr(v float64) *float64 {
-	return &v
-}
-
 func IntPtr(v int) *int {
 	return &v
 }

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
 )
 
 // GetNetworksRequest represents a rwquest to get all networks
@@ -279,9 +279,8 @@ func (r *GetRouterDetailsRequest) RequestURL() string {
 
 // CreateRouterRequest represents a request to create a new router.
 type CreateRouterRequest struct {
-	Name         string                `json:"name"`
-	Labels       []upcloud.Label       `json:"labels,omitempty"`
-	StaticRoutes []upcloud.StaticRoute `json:"static_routes,omitempty"`
+	Name   string          `json:"name"`
+	Labels []upcloud.Label `json:"labels,omitempty"`
 }
 
 // RequestURL implements the Request interface.
@@ -303,10 +302,9 @@ func (r CreateRouterRequest) MarshalJSON() ([]byte, error) {
 
 // ModifyRouterRequest represents a request to modify an existing router.
 type ModifyRouterRequest struct {
-	UUID         string                 `json:"-"`
-	Name         string                 `json:"name"`
-	Labels       *[]upcloud.Label       `json:"labels,omitempty"`
-	StaticRoutes *[]upcloud.StaticRoute `json:"static_routes,omitempty"`
+	UUID   string           `json:"-"`
+	Name   string           `json:"name"`
+	Labels *[]upcloud.Label `json:"labels,omitempty"`
 }
 
 // RequestURL implements the Request interface.
