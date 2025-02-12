@@ -74,16 +74,37 @@ func TestManager(t *testing.T) {
 		upCfg,
 		config.AutoscalingOptions{},
 		cloudprovider.NodeGroupDiscoveryOptions{
-			NodeGroupSpecs: []string{"1:2:one", "11:20:two"},
+			NodeGroupSpecs: []string{"1:2:one", "11:20:two", "0:10:three"},
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, upCfg.ClusterID, m.clusterID.String())
-	require.Equal(t, dynamic.NodeGroupSpec{Name: "one", MinSize: 1, MaxSize: 2}, m.nodeGroupSpecs["one"])
-	require.Equal(t, dynamic.NodeGroupSpec{Name: "two", MinSize: 11, MaxSize: 20}, m.nodeGroupSpecs["two"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "one", MinSize: 1, MaxSize: 2, SupportScaleToZero: false}, m.nodeGroupSpecs["one"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "two", MinSize: 11, MaxSize: 20, SupportScaleToZero: false}, m.nodeGroupSpecs["two"])
+	require.Equal(t, dynamic.NodeGroupSpec{Name: "three", MinSize: 0, MaxSize: 10, SupportScaleToZero: true}, m.nodeGroupSpecs["three"])
 	require.NoError(t, m.refresh())
 	require.Positive(t, len(m.nodeGroups))
 	require.Equal(t, len(svc.Clusters[clusterID.String()].NodeGroups), len(m.nodeGroups))
+}
+
+func ScaleDownToZeroNotPossibleWithOneNodeGroup(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	upCfg := upCloudConfig{ClusterID: clusterID.String()}
+	svc := newMockService(clusterID)
+
+	m, err := newManager(
+		context.Background(),
+		svc,
+		upCfg,
+		config.AutoscalingOptions{},
+		cloudprovider.NodeGroupDiscoveryOptions{
+			NodeGroupSpecs: []string{"0:10:one", "11:20:two", "0:10:three"},
+		},
+	)
+	require.Nil(t, m)
+	require.Error(t, err, "failed to parse node group spec, format should be `<minSize>:<maxSize>:<nodeGroupName>`: invalid node group spec: min size must be >= 1")
 }
 
 func newMockService(clusterID uuid.UUID) *mocks.UpCloudService {
