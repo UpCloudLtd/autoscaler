@@ -254,18 +254,17 @@ func (u *upCloudNodeGroup) Exist() bool {
 func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
 
-	// TODO: FIX LATER
 	if u.size > 0 {
 		return nil, cloudprovider.ErrNotImplemented
 	}
 
 	cpuQuantity := resource.NewQuantity(int64(u.plan.CoreNumber*1000), resource.DecimalSI)
 	memoryQuantity := resource.NewQuantity(int64(u.plan.MemoryAmount*1024*1024), resource.BinarySI)
-	podsQuantity := resource.NewQuantity(int64(110), resource.DecimalSI)
+	podsQuantity := resource.NewQuantity(int64(nodeMaxPods), resource.DecimalSI)
 
 	var ephemeralStorageQuantity *resource.Quantity
 	if u.plan.MemoryAmount > 0 {
-		ephemeralStorageQuantity = resource.NewQuantity(int64(u.plan.MemoryAmount*1024*1024), resource.BinarySI)
+		ephemeralStorageQuantity = resource.NewQuantity(int64(u.plan.StorageSize*1024*1024), resource.BinarySI)
 	} else {
 		ephemeralStorageQuantity = resource.NewQuantity(int64(21559343316992), resource.BinarySI)
 	}
@@ -275,13 +274,13 @@ func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, err
 		labels[u.labels[i].Key] = u.labels[i].Value
 	}
 
-	tains := make([]apiv1.Taint, len(u.taints))
+	taints := make([]apiv1.Taint, len(u.taints))
 	for i := range u.taints {
-		tains = append(tains, apiv1.Taint{
+		taints[i] = apiv1.Taint{
 			Effect: apiv1.TaintEffect(u.taints[i].Effect),
 			Key:    u.taints[i].Key,
 			Value:  u.taints[i].Value,
-		})
+		}
 	}
 
 	resourceList := apiv1.ResourceList{
@@ -311,7 +310,7 @@ func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, err
 		},
 		Spec: apiv1.NodeSpec{
 			ProviderID: fmt.Sprintf("upcloud:////%s", u.name),
-			Taints:     tains,
+			Taints:     taints,
 		},
 		Status: apiv1.NodeStatus{
 			Allocatable: resourceList,
