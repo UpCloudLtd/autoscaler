@@ -53,9 +53,6 @@ type ManagedDatabaseLogicalDatabaseManager interface{}
 type Permission interface{}
 type ServerGroup interface{}
 type Server interface{}
-type ManagedObjectStorage interface{}
-type Gateway interface{}
-type Partner interface{}
 " > $sdk_dir/service/stubs.go
 
 find $sdk_dir -name "*.go" -exec sed -i 's#"'${UPCLOUD_SDK_PACKAGE}'#"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/'${UPCLOUD_SDK_PACKAGE}'#gI' {} \;
