@@ -5,14 +5,6 @@ import (
 	"time"
 )
 
-type (
-	// StorageEncryption is storage encryption strategy enum type.
-	StorageEncryption string
-
-	// StorageTier is storage tier enum type.
-	StorageTier string
-)
-
 // Constants
 const (
 	StorageTypeBackup   = "backup"
@@ -21,12 +13,8 @@ const (
 	StorageTypeNormal   = "normal"
 	StorageTypeTemplate = "template"
 
-	StorageTemplateTypeCloudInit = "cloud-init"
-	StorageTemplateTypeNative    = "native"
-
-	StorageTierHDD      = "hdd"
-	StorageTierMaxIOPS  = "maxiops"
-	StorageTierStandard = "standard"
+	StorageTierHDD     = "hdd"
+	StorageTierMaxIOPS = "maxiops"
 
 	StorageAccessPublic  = "public"
 	StorageAccessPrivate = "private"
@@ -57,12 +45,6 @@ const (
 	StorageImportStateCancelling = "cancelling"
 	StorageImportStateCancelled  = "cancelled"
 	StorageImportStateCompleted  = "completed"
-
-	StorageEncryptionDataAtRest StorageEncryption = "data-at-rest"
-	StorageEncryptionNone       StorageEncryption = "none"
-
-	// Deprecated: Use StorageEncryptionDataAtRest instead.
-	StorageEncryptionDataAtReset StorageEncryption = "data-at-rest"
 )
 
 // Storages represents a /storage response
@@ -92,19 +74,17 @@ func (s *Storages) UnmarshalJSON(b []byte) error {
 
 // Storage represents a storage device
 type Storage struct {
-	Access    string  `json:"access"`
-	Encrypted Boolean `json:"encrypted"`
-	License   float64 `json:"license"`
+	Access  string  `json:"access"`
+	License float64 `json:"license"`
 	// TODO: Convert to boolean
-	PartOfPlan   string `json:"part_of_plan"`
-	Size         int    `json:"size"`
-	State        string `json:"state"`
-	TemplateType string `json:"template_type"`
-	Tier         string `json:"tier"`
-	Title        string `json:"title"`
-	Type         string `json:"type"`
-	UUID         string `json:"uuid"`
-	Zone         string `json:"zone"`
+	PartOfPlan string `json:"part_of_plan"`
+	Size       int    `json:"size"`
+	State      string `json:"state"`
+	Tier       string `json:"tier"`
+	Title      string `json:"title"`
+	Type       string `json:"type"`
+	UUID       string `json:"uuid"`
+	Zone       string `json:"zone"`
 	// Only for type "backup":
 	Origin  string    `json:"origin"`
 	Created time.Time `json:"created"`
@@ -168,9 +148,7 @@ type BackupRule struct {
 
 // ServerStorageDevice represents a storage device in the context of server requests or server details
 type ServerStorageDevice struct {
-	Address   string  `json:"address"`
-	Encrypted Boolean `json:"storage_encrypted"`
-	Labels    []Label `json:"labels"`
+	Address string `json:"address"`
 	// TODO: Convert to boolean
 	PartOfPlan string `json:"part_of_plan"`
 	UUID       string `json:"storage"`
@@ -181,7 +159,7 @@ type ServerStorageDevice struct {
 	BootDisk   int    `json:"boot_disk,string"`
 }
 
-// StorageImportDetails represents the details of an ongoing or completed storage import operation.
+// StorageImportDetails represents the details of an ongoing or completed storge import operation.
 type StorageImportDetails struct {
 	ClientContentLength int       `json:"client_content_length"`
 	ClientContentType   string    `json:"client_content_type"`

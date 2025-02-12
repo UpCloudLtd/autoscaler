@@ -32,5 +32,4 @@ type Zone struct {
 	ID          string  `json:"id"`
 	Description string  `json:"description"`
 	Public      Boolean `json:"public"`
-	ParentZone  string  `json:"parent_zone,omitempty"`
 }
