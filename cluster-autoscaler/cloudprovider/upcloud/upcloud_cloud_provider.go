@@ -48,6 +48,7 @@ const (
 	logInfo  klog.Level = 4
 	logDebug klog.Level = 5
 
+	envUpCloudToken     string = "UPCLOUD_TOKEN"
 	envUpCloudUsername  string = "UPCLOUD_USERNAME"
 	envUpCloudPassword  string = "UPCLOUD_PASSWORD"
 	envUpCloudClusterID string = "UPCLOUD_CLUSTER_ID"
@@ -55,6 +56,7 @@ const (
 
 type upCloudConfig struct {
 	ClusterID string
+	Token     string
 	Username  string
 	Password  string
 	UserAgent string
@@ -206,10 +208,13 @@ func buildCloudConfig(opts config.AutoscalingOptions) (upCloudConfig, error) {
 }
 
 func newUpCloudService(cfg upCloudConfig) (upCloudService, error) {
-	if cfg.Username == "" || cfg.Password == "" {
+	if cfg.Token == "" && (cfg.Username == "" || cfg.Password == "") {
 		return nil, errors.NewAutoscalerError(errors.ConfigurationError, "UpCloud API credentials not configured")
 	}
 	upClient := client.New(cfg.Username, cfg.Password)
+	if cfg.Token != "" {
+		upClient = client.New("", "", client.WithBearerAuth(cfg.Token))
+	}
 	if cfg.UserAgent != "" {
 		upClient.UserAgent = cfg.UserAgent
 	}
@@ -222,11 +227,13 @@ func cloudConfigFromEnv(opts config.AutoscalingOptions) (upCloudConfig, error) {
 	if cfg.ClusterID = os.Getenv(envUpCloudClusterID); cfg.ClusterID == "" {
 		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudClusterID)
 	}
-	if cfg.Username = os.Getenv(envUpCloudUsername); cfg.Username == "" {
-		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudUsername)
-	}
-	if cfg.Password = os.Getenv(envUpCloudPassword); cfg.Password == "" {
-		return cfg, fmt.Errorf("environment variable %s not set", envUpCloudPassword)
+	if cfg.Token = os.Getenv(envUpCloudToken); cfg.Token == "" {
+		if cfg.Username = os.Getenv(envUpCloudUsername); cfg.Username == "" {
+			return cfg, fmt.Errorf("environment variable %s not set", envUpCloudUsername)
+		}
+		if cfg.Password = os.Getenv(envUpCloudPassword); cfg.Password == "" {
+			return cfg, fmt.Errorf("environment variable %s not set", envUpCloudPassword)
+		}
 	}
 	if opts.UserAgent != "" {
 		cfg.UserAgent = opts.UserAgent

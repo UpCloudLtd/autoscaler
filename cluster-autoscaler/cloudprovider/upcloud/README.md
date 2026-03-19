@@ -21,9 +21,15 @@ See all images at https://github.com/orgs/UpCloudLtd/packages/container/package/
 
 ### Required environment variables
 
+- `UPCLOUD_CLUSTER_ID` - UKS cluster ID
+
+### Authentication environment variables
+
+- `UPCLOUD_TOKEN` - UpCloud API token
 - `UPCLOUD_USERNAME` - UpCloud's API username
 - `UPCLOUD_PASSWORD` - UpCloud's API user's password
-- `UPCLOUD_CLUSTER_ID` - UKS cluster ID
+
+If `UPCLOUD_TOKEN` is set, it is used instead of `UPCLOUD_USERNAME` and `UPCLOUD_PASSWORD`.
 
 ### Optional environment variables
 
@@ -49,14 +55,20 @@ $ docker build -t <image:tag> -f Dockerfile.amd64 .
 
 ### Create a Kubernetes secret
 
-Execute the following command to add UpCloud credentials as Kubernetes secret:
-<sub>_Replace `$UPCLOUD_PASSWORD` and `$UPCLOUD_USERNAME` with your UpCloud API credentials if not defined using environment variables._</sub>
+Execute one of the following commands to add UpCloud credentials as a Kubernetes secret.
+<sub>_Replace the shell variables with your UpCloud API credentials if not defined using environment variables._</sub>
 
 ```shell
 $ kubectl -n kube-system create secret generic upcloud-autoscaler --from-literal=password=$UPCLOUD_PASSWORD --from-literal=username=$UPCLOUD_USERNAME
 ```
 
-Note that user `$UPCLOUD_USERNAME` needs to have permission to manage Kubernetes cluster through UpCloud API.
+or
+
+```shell
+$ kubectl -n kube-system create secret generic upcloud-autoscaler --from-literal=token=$UPCLOUD_TOKEN
+```
+
+Note that the configured UpCloud credentials need permission to manage the Kubernetes cluster through the UpCloud API.
 
 ### Deploy Cluster Autoscaler
 
@@ -114,3 +126,5 @@ Setup environment variables and run autoscaler binary:
 ```shell
 $ ./cluster-autoscaler-amd64 --address=:8087 --cloud-provider=upcloud --stderrthreshold=info --scale-down-enabled=true --v=4 --kubeconfig=<path to kubeconfig file>
 ```
+
+Use either `UPCLOUD_TOKEN` or the `UPCLOUD_USERNAME` and `UPCLOUD_PASSWORD` pair.
