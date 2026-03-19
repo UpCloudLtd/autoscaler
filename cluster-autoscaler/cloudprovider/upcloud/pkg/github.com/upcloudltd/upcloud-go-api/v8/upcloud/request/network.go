@@ -3,8 +3,9 @@ package request
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
 )
 
 // GetNetworksRequest represents a rwquest to get all networks
@@ -36,7 +37,7 @@ func (r *GetNetworksInZoneRequest) RequestURL() string {
 	return fmt.Sprintf("/network?zone=%s&%s", r.Zone, encodeQueryFilters(r.Filters))
 }
 
-// GetNetworkDetailsRequest represents a request to the the details of
+// GetNetworkDetailsRequest represents a request to the details of
 // a single network.
 type GetNetworkDetailsRequest struct {
 	UUID string
@@ -73,14 +74,20 @@ func (r CreateNetworkRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&v)
 }
 
+type ModifyNetworkClearIPNetworksFields struct {
+	DHCPDns bool
+}
+
 // ModifyNetworkRequest represents a request to modify an existing network.
 type ModifyNetworkRequest struct {
 	UUID string `json:"-"`
 
-	Name       string                 `json:"name,omitempty"`
-	Zone       string                 `json:"zone,omitempty"`
-	IPNetworks upcloud.IPNetworkSlice `json:"ip_networks,omitempty"`
-	Labels     *[]upcloud.Label       `json:"labels,omitempty"`
+	Name string `json:"name,omitempty"`
+	Zone string `json:"zone,omitempty"`
+	// `upcloud.IPNetworkSlice` does not support clearing `DHCPDns`. Use `ClearIPNetworksField` to clear these fields.
+	IPNetworks            upcloud.IPNetworkSlice               `json:"ip_networks,omitempty"`
+	Labels                *[]upcloud.Label                     `json:"labels,omitempty"`
+	ClearIPNetworksFields []ModifyNetworkClearIPNetworksFields `json:"-"`
 }
 
 // RequestURL implements the Request interface.
@@ -91,11 +98,59 @@ func (r *ModifyNetworkRequest) RequestURL() string {
 // MarshalJSON is a custom marshaller that deals with
 // deeply embedded values.
 func (r ModifyNetworkRequest) MarshalJSON() ([]byte, error) {
-	type localModifyNetworkRequest ModifyNetworkRequest
+	// Work-around for clearing IPNetwork fields. The modify request should use a struct that supports distinguishing empty values from undefined ones. Currently omitempty blocks user from clearing these fields.
+	type mnrType ModifyNetworkRequest
+	d, err := json.Marshal((mnrType)(r))
+	if err != nil {
+		return nil, err
+	}
+
+	m := make(map[string]interface{})
+	if err := json.Unmarshal(d, &m); err != nil {
+		return nil, err
+	}
+
+	ipNetworksWrapper, ok := m["ip_networks"].(map[string]interface{})
+	if !ok {
+		ipNetworksWrapper = map[string]interface{}{}
+	}
+
+	ipNetworks, ok := ipNetworksWrapper["ip_network"].([]interface{})
+	if !ok {
+		ipNetworks = []interface{}{}
+	}
+
+	n := max(len(r.ClearIPNetworksFields), len(ipNetworks))
+	newIpNetworks := make([]interface{}, n)
+
+	for i := range n {
+		net := make(map[string]interface{})
+		if i < len(ipNetworks) {
+			if prev, ok := ipNetworks[i].(map[string]interface{}); ok {
+				net = prev
+			}
+		}
+
+		var clearIPNet ModifyNetworkClearIPNetworksFields
+		if i < len(r.ClearIPNetworksFields) {
+			clearIPNet = r.ClearIPNetworksFields[i]
+		}
+
+		if clearIPNet.DHCPDns {
+			net["dhcp_dns"] = []string{}
+		}
+		newIpNetworks[i] = net
+	}
+
+	if len(newIpNetworks) > 0 {
+		m["ip_networks"] = map[string]interface{}{"ip_network": newIpNetworks}
+	}
+
+	// Handle extra network object layer.
 	v := struct {
-		ModifyNetworkRequest localModifyNetworkRequest `json:"network"`
+		ModifyNetworkRequest map[string]any `json:"network"`
 	}{}
-	v.ModifyNetworkRequest = localModifyNetworkRequest(r)
+	v.ModifyNetworkRequest = m
 
 	return json.Marshal(&v)
 }
@@ -252,7 +307,47 @@ func (r ModifyNetworkInterfaceRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&v)
 }
 
-// GetRouterssequest represents a request to list routers.
+type AssignIPAddressToNetworkInterfaceRequest struct {
+	ServerUUID string `json:"-"`
+	Index      int    `json:"-"`
+	Force      bool   `json:"-"`
+
+	Family  string `json:"family"`
+	Address string `json:"address,omitempty"`
+}
+
+// MarshalJSON is a custom marshaller that deals with
+// deeply embedded values.
+func (r AssignIPAddressToNetworkInterfaceRequest) MarshalJSON() ([]byte, error) {
+	type localAssignIPAddressToNetworkInterfaceRequest AssignIPAddressToNetworkInterfaceRequest
+	v := struct {
+		AssignIPAddressToNetworkInterfaceRequest localAssignIPAddressToNetworkInterfaceRequest `json:"ip_address"`
+	}{}
+	v.AssignIPAddressToNetworkInterfaceRequest = localAssignIPAddressToNetworkInterfaceRequest(r)
+
+	return json.Marshal(&v)
+}
+
+func (r *AssignIPAddressToNetworkInterfaceRequest) RequestURL() string {
+	qv := url.Values{}
+	if r.Force {
+		qv.Set("force", "yes")
+	}
+
+	return fmt.Sprintf("/server/%s/networking/interface/%d/ip-address?%s", r.ServerUUID, r.Index, qv.Encode())
+}
+
+type DeleteIPAddressFromNetworkInterfaceRequest struct {
+	ServerUUID string `json:"-"`
+	Index      int    `json:"-"`
+	Address    string `json:"-"`
+}
+
+func (r *DeleteIPAddressFromNetworkInterfaceRequest) RequestURL() string {
+	return fmt.Sprintf("/server/%s/networking/interface/%d/ip-address/%s", r.ServerUUID, r.Index, r.Address)
+}
+
+// GetRoutersRequest represents a request to list routers.
 type GetRoutersRequest struct {
 	Filters []QueryFilter
 }
@@ -279,8 +374,9 @@ func (r *GetRouterDetailsRequest) RequestURL() string {
 
 // CreateRouterRequest represents a request to create a new router.
 type CreateRouterRequest struct {
-	Name   string          `json:"name"`
-	Labels []upcloud.Label `json:"labels,omitempty"`
+	Name         string                `json:"name"`
+	Labels       []upcloud.Label       `json:"labels,omitempty"`
+	StaticRoutes []upcloud.StaticRoute `json:"static_routes,omitempty"`
 }
 
 // RequestURL implements the Request interface.
@@ -302,9 +398,10 @@ func (r CreateRouterRequest) MarshalJSON() ([]byte, error) {
 
 // ModifyRouterRequest represents a request to modify an existing router.
 type ModifyRouterRequest struct {
-	UUID   string           `json:"-"`
-	Name   string           `json:"name"`
-	Labels *[]upcloud.Label `json:"labels,omitempty"`
+	UUID         string                 `json:"-"`
+	Name         string                 `json:"name"`
+	Labels       *[]upcloud.Label       `json:"labels,omitempty"`
+	StaticRoutes *[]upcloud.StaticRoute `json:"static_routes,omitempty"`
 }
 
 // RequestURL implements the Request interface.

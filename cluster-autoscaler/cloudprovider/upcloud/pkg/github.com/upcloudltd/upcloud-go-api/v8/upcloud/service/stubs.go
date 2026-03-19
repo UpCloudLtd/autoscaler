@@ -16,4 +16,9 @@ type ManagedDatabaseLogicalDatabaseManager interface{}
 type Permission interface{}
 type ServerGroup interface{}
 type Server interface{}
+type ManagedObjectStorage interface{}
+type Gateway interface{}
+type Partner interface{}
+type AuditLog interface{}
+type FileStorage interface{}
 

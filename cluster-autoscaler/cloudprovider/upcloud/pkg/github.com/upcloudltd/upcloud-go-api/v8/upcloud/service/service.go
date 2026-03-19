@@ -3,16 +3,21 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/client"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/client"
 )
 
 type Client interface {
 	// Get performs a GET request to the specified path and returns the response body.
 	Get(ctx context.Context, path string) ([]byte, error)
+	// GetStream performs a GET request to the specified path and returns the response body reader.
+	GetStream(ctx context.Context, path string) (io.ReadCloser, error)
 	// Post performs a POST request to the specified path and returns the response body.
 	Post(ctx context.Context, path string, body []byte) ([]byte, error)
 	// Put performs a PUT request to the specified path and returns the response body.
@@ -21,8 +26,10 @@ type Client interface {
 	Patch(ctx context.Context, path string, body []byte) ([]byte, error)
 	// Delete performs a DELETE request to the specified path and returns the response body.
 	Delete(ctx context.Context, path string) ([]byte, error)
-	// Do performs a HTTP request using custom request object and returns the response body.
+	// Do performs an HTTP request using custom request object and returns the response body.
 	Do(r *http.Request) ([]byte, error)
+	// DoStream performs an HTTP request using custom request object and returns the response body reader.
+	DoStream(r *http.Request) (io.ReadCloser, error)
 }
 
 type requestable interface {
@@ -47,6 +54,11 @@ type service interface {
 	ManagedDatabaseLogicalDatabaseManager
 	Permission
 	Kubernetes
+	ManagedObjectStorage
+	Gateway
+	Partner
+	AuditLog
+	FileStorage
 }
 
 var _ service = (*Service)(nil)
@@ -57,19 +69,30 @@ type Service struct {
 }
 
 // Get performs a GET request to the specified location with context and stores the result in the value pointed to by v.
-func (s *Service) get(ctx context.Context, location string, v interface{}) error {
+func (s *Service) get(ctx context.Context, location string, v any) error {
 	res, err := s.client.Get(ctx, location)
 	if err != nil {
 		return parseJSONServiceError(err)
 	}
+
 	if v == nil {
 		return nil
 	}
-	return json.Unmarshal(res, v)
+
+	err = json.Unmarshal(res, v)
+	if err == nil {
+		return nil
+	}
+
+	if strings.HasPrefix(err.Error(), "json: cannot unmarshal array") {
+		return errors.Join(err, errors.New("get: request parameters might be incorrect, ensure that required fields, such as UUID, are set to valid values"))
+	}
+
+	return err
 }
 
 // Create performs a POST request to the specified location with context and stores the response in the value pointed to by v.
-func (s *Service) create(ctx context.Context, r requestable, v interface{}) error {
+func (s *Service) create(ctx context.Context, r requestable, v any) error {
 	payload, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -86,7 +109,7 @@ func (s *Service) create(ctx context.Context, r requestable, v interface{}) erro
 }
 
 // Modify performs a PATCH request to the specified location with context and stores the response in the value pointed to by v.
-func (s *Service) modify(ctx context.Context, r requestable, v interface{}) error {
+func (s *Service) modify(ctx context.Context, r requestable, v any) error {
 	payload, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -103,7 +126,7 @@ func (s *Service) modify(ctx context.Context, r requestable, v interface{}) erro
 }
 
 // Modify performs a PUT request to the specified location with context and stores the response in the value pointed to by v.
-func (s *Service) replace(ctx context.Context, r requestable, v interface{}) error {
+func (s *Service) replace(ctx context.Context, r requestable, v any) error {
 	payload, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -139,14 +162,14 @@ func parseJSONServiceError(err error) error {
 
 		switch clientError.Type {
 		case client.ErrorTypeProblem:
-			if err := json.Unmarshal(clientError.ResponseBody, prob); err != nil {
-				return fmt.Errorf("received malformed client error: %s", string(clientError.ResponseBody))
+			if parseErr := json.Unmarshal(clientError.ResponseBody, prob); parseErr != nil {
+				return fmt.Errorf("received malformed client error (%w): %w", parseErr, err)
 			}
 			return prob
 		default:
 			ucError := &legacyError{}
-			if err := json.Unmarshal(clientError.ResponseBody, ucError); err != nil {
-				return fmt.Errorf("received malformed client error: %s", string(clientError.ResponseBody))
+			if parseErr := json.Unmarshal(clientError.ResponseBody, ucError); parseErr != nil {
+				return fmt.Errorf("received malformed client error (%w): %w", parseErr, err)
 			}
 
 			prob.Type = ucError.ErrorCode
