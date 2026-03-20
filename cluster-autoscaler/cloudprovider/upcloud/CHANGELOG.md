@@ -5,6 +5,12 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- fixed regressions in `upCloudNodeGroup` afer syncin with upstream `master`:
+  - added `ForceDeleteNodes()` and delegating it to the existing `DeleteNodes()` flow
+  - updated `TemplateNodeInfo()` to match the current upstream `cloudprovider.NodeGroup` signature
+
 ### Changed
 
 - synced with upstream `master` branch (CA 1.35.0-rc.0)

@@ -28,8 +28,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/request"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // upCloudNodeGroup implements cloudprovide.NodeGroup interfaces
@@ -177,6 +177,14 @@ func (u *upCloudNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	return nil
 }
 
+// ForceDeleteNodes deletes nodes from this node group without additional
+// provider-side constraints. UpCloud exposes the same deletion flow here as the
+// regular delete path.
+func (u *upCloudNodeGroup) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.ForceDeleteNodes called", u.Id())
+	return u.DeleteNodes(nodes)
+}
+
 func (u *upCloudNodeGroup) deleteNode(nodeName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDeleteNode)
 	defer cancel()
@@ -239,13 +247,13 @@ func (u *upCloudNodeGroup) Exist() bool {
 	return u.name != ""
 }
 
-// TemplateNodeInfo returns a schedulerframework.NodeInfo structure of an empty
+// TemplateNodeInfo returns a framework.NodeInfo structure of an empty
 // (as if just started) node. This will be used in scale-up simulations to
 // predict what would a new node look like if a node group was expanded. The returned
 // NodeInfo is expected to have a fully populated Node object, with all of the labels,
 // capacity and allocatable information as well as all pods that are started on
 // the node by default, using manifest (most likely only kube-proxy). Implementation optional.
-func (u *upCloudNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (u *upCloudNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	klog.V(logDebug).Infof("UpCloud %s/NodeGroup.TemplateNodeInfo called", u.Id())
 	return nil, cloudprovider.ErrNotImplemented
 }

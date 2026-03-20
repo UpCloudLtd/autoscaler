@@ -95,6 +95,22 @@ func TestUpCloudNodeGroup_DeleteNodes(t *testing.T) {
 	require.Equal(t, kng.Count-1, size)
 }
 
+func TestUpCloudNodeGroup_ForceDeleteNodes(t *testing.T) {
+	t.Parallel()
+
+	clusterID := uuid.New()
+	svc := newMockService(clusterID)
+	kng := svc.Clusters[clusterID.String()].NodeGroups[0]
+	g := &upCloudNodeGroup{size: kng.Count, maxSize: 20, name: kng.Name, svc: svc, clusterID: clusterID}
+	size, _ := g.TargetSize()
+	require.Equal(t, kng.Count, size)
+	require.NoError(t, g.ForceDeleteNodes([]*v1.Node{
+		{ObjectMeta: metav1.ObjectMeta{Name: "group1-node-1"}},
+	}))
+	size, _ = g.TargetSize()
+	require.Equal(t, kng.Count-1, size)
+}
+
 func TestUpCloudNodeGroup_Nodes(t *testing.T) {
 	t.Parallel()
 
