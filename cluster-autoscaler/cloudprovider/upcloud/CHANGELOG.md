@@ -8,6 +8,7 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 ### Changed
 
 - synced with upstream `master` branch (CA 1.35.0-rc.0)
+- pinned the version of UpCloud autoscaler Docker image version in examples
 
 ## [1.1.0]
 

@@ -8,10 +8,13 @@ Cluster Autoscaler for UpCloud automatically adjusts the size of UKS node groups
 
 Additional info about the Cluster Autoscaler (CA) can be found from the project's [README](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/README.md) file and from the [FAQ](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md) .
 
-Latest Docker image is available at Github package registry
+Docker images are available in GitHub package registry:
+
 ```shell
-$ docker pull ghcr.io/upcloudltd/autoscaler:latest
+$ docker pull ghcr.io/upcloudltd/autoscaler:v1.29.4
 ```
+
+See all images at https://github.com/orgs/UpCloudLtd/packages/container/package/autoscaler
 
 ## Configuration
 ### Required environment variables

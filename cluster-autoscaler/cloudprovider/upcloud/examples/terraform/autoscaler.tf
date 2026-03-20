@@ -42,7 +42,7 @@ resource "kubernetes_deployment" "autoscaler" {
         service_account_name = "cluster-autoscaler"
         priority_class_name  = "system-cluster-critical"
         container {
-          image = "ghcr.io/upcloudltd/autoscaler:latest"
+          image = "ghcr.io/upcloudltd/autoscaler:v1.29.4"
           name  = "cluster-autoscaler"
           resources {
             limits = {
