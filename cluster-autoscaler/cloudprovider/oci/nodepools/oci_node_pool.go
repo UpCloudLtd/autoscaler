@@ -18,9 +18,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/client-go/kubernetes"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
 )
@@ -44,6 +44,17 @@ type nodePool struct {
 	id      string
 	minSize int
 	maxSize int
+}
+
+type nodeGroupAutoDiscovery struct {
+	manager    NodePoolManager
+	kubeClient kubernetes.Interface
+
+	clusterId     string
+	compartmentId string
+	tags          map[string]string
+	minSize       int
+	maxSize       int
 }
 
 // MaxSize returns maximum size of the node group.
@@ -171,6 +182,11 @@ func (np *nodePool) DeleteNodes(nodes []*apiv1.Node) (err error) {
 	return deleteInstancesErr
 }
 
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (np *nodePool) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	return cloudprovider.ErrNotImplemented
+}
+
 // DecreaseTargetSize decreases the target size of the node group. This function
 // doesn't permit to delete any existing node and can be used only to reduce the
 // request for new nodes that have not been yet fulfilled. Delta should be negative.
@@ -198,6 +214,27 @@ func (np *nodePool) DecreaseTargetSize(delta int) error {
 		}
 	}
 	klog.V(4).Infof("DECREASE_TARGET_CHECK_VIA_COMPUTE: %v", decreaseTargetCheckViaComputeBool)
+	np.manager.InvalidateAndRefreshCache()
+	nodes, err := np.manager.GetNodePoolNodes(np)
+	if err != nil {
+		klog.V(4).Error(err, "error while performing GetNodePoolNodes call")
+		return err
+	}
+	// We do not have an OCI API that allows us to delete a node with a compute instance. So we rely on
+	// the below approach to determine the number running instance in a nodepool from the compute API and
+	//update the size of the nodepool accordingly. We should move away from this approach once we have an API
+	// to delete a specific node without a compute instance.
+	if !decreaseTargetCheckViaComputeBool {
+		for _, node := range nodes {
+			if node.Status != nil && node.Status.ErrorInfo != nil {
+				if node.Status.ErrorInfo.ErrorClass == cloudprovider.OutOfResourcesErrorClass {
+					klog.Infof("Using Compute to calculate nodepool size as nodepool may contain nodes without a compute instance.")
+					decreaseTargetCheckViaComputeBool = true
+					break
+				}
+			}
+		}
+	}
 	var nodesLen int
 	if decreaseTargetCheckViaComputeBool {
 		nodesLen, err = np.manager.GetExistingNodePoolSizeViaCompute(np)
@@ -206,12 +243,6 @@ func (np *nodePool) DecreaseTargetSize(delta int) error {
 			return err
 		}
 	} else {
-		np.manager.InvalidateAndRefreshCache()
-		nodes, err := np.manager.GetNodePoolNodes(np)
-		if err != nil {
-			klog.V(4).Error(err, "error while performing GetNodePoolNodes call")
-			return err
-		}
 		nodesLen = len(nodes)
 	}
 
@@ -262,24 +293,24 @@ func (np *nodePool) Nodes() ([]cloudprovider.Instance, error) {
 	return np.manager.GetNodePoolNodes(np)
 }
 
-// TemplateNodeInfo returns a schedulerframework.NodeInfo structure of an empty
+// TemplateNodeInfo returns a framework.NodeInfo structure of an empty
 // (as if just started) node. This will be used in scale-up simulations to
 // predict what would a new node look like if a node group was expanded. The returned
 // NodeInfo is expected to have a fully populated Node object, with all of the labels,
 // capacity and allocatable information as well as all pods that are started on
 // the node by default, using manifest (most likely only kube-proxy). Implementation optional.
-func (np *nodePool) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (np *nodePool) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	node, err := np.manager.GetNodePoolTemplateNode(np)
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to build node pool template")
 	}
 
-	nodeInfo := schedulerframework.NewNodeInfo(
-		cloudprovider.BuildKubeProxy(np.id),
-		ocicommon.BuildFlannelPod(),
-		ocicommon.BuildProxymuxClientPod(),
+	nodeInfo := framework.NewNodeInfo(
+		node, nil,
+		&framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(np.id)},
+		&framework.PodInfo{Pod: ocicommon.BuildFlannelPod()},
+		&framework.PodInfo{Pod: ocicommon.BuildProxymuxClientPod()},
 	)
-	nodeInfo.SetNode(node)
 	return nodeInfo, nil
 }
 

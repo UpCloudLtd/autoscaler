@@ -27,7 +27,7 @@ import (
 	testconfig "k8s.io/autoscaler/cluster-autoscaler/config/test"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
+	schedulerimpl "k8s.io/kubernetes/pkg/scheduler/framework"
 
 	apiv1 "k8s.io/api/core/v1"
 
@@ -52,20 +52,20 @@ func TestCreateNodeNameToInfoMap(t *testing.T) {
 
 	res := CreateNodeNameToInfoMap([]*apiv1.Pod{p1, p2, p3, podWaitingForPreemption}, []*apiv1.Node{n1, n2})
 	assert.Equal(t, 2, len(res))
-	assert.Equal(t, p1, res["node1"].Pods[0].Pod)
-	assert.Equal(t, podWaitingForPreemption, res["node1"].Pods[1].Pod)
+	assert.Equal(t, p1, res["node1"].Pods()[0].Pod)
+	assert.Equal(t, podWaitingForPreemption, res["node1"].Pods()[1].Pod)
 	assert.Equal(t, n1, res["node1"].Node())
-	assert.Equal(t, p2, res["node2"].Pods[0].Pod)
+	assert.Equal(t, p2, res["node2"].Pods()[0].Pod)
 	assert.Equal(t, n2, res["node2"].Node())
 }
 
 func TestResourceList(t *testing.T) {
 	tests := []struct {
-		resource *schedulerframework.Resource
+		resource *schedulerimpl.Resource
 		expected apiv1.ResourceList
 	}{
 		{
-			resource: &schedulerframework.Resource{},
+			resource: &schedulerimpl.Resource{},
 			expected: map[apiv1.ResourceName]resource.Quantity{
 				apiv1.ResourceCPU:              *resource.NewScaledQuantity(0, -3),
 				apiv1.ResourceMemory:           *resource.NewQuantity(0, resource.BinarySI),
@@ -74,7 +74,7 @@ func TestResourceList(t *testing.T) {
 			},
 		},
 		{
-			resource: &schedulerframework.Resource{
+			resource: &schedulerimpl.Resource{
 				MilliCPU:         4,
 				Memory:           2000,
 				EphemeralStorage: 5000,

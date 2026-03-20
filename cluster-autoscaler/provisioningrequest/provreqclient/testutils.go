@@ -24,14 +24,12 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	v1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/clientset/versioned/fake"
+	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/informers/externalversions"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqwrapper"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	fake_kubernetes "k8s.io/client-go/kubernetes/fake"
-	v1 "k8s.io/client-go/listers/core/v1"
-	klog "k8s.io/klog/v2"
 )
 
 // NewFakeProvisioningRequestClient mock ProvisioningRequestClient for tests.
@@ -43,7 +41,7 @@ func NewFakeProvisioningRequestClient(ctx context.Context, t *testing.T, prs ...
 		if pr == nil {
 			continue
 		}
-		if _, err := provReqClient.AutoscalingV1beta1().ProvisioningRequests(pr.Namespace).Create(ctx, pr.ProvisioningRequest, metav1.CreateOptions{}); err != nil {
+		if _, err := provReqClient.AutoscalingV1().ProvisioningRequests(pr.Namespace).Create(ctx, pr.ProvisioningRequest, metav1.CreateOptions{}); err != nil {
 			t.Errorf("While adding a ProvisioningRequest: %s/%s to fake client, got error: %v", pr.Namespace, pr.Name, err)
 		}
 		for _, pd := range pr.PodTemplates {
@@ -52,35 +50,33 @@ func NewFakeProvisioningRequestClient(ctx context.Context, t *testing.T, prs ...
 			}
 		}
 	}
-	provReqLister, err := newPRsLister(provReqClient, make(chan struct{}))
-	if err != nil {
-		t.Fatalf("Failed to create Provisioning Request lister. Error was: %v", err)
-	}
-	podTemplLister, err := newFakePodTemplatesLister(t, podTemplClient, make(chan struct{}))
-	if err != nil {
-		t.Fatalf("Failed to create Provisioning Request lister. Error was: %v", err)
-	}
-	return &ProvisioningRequestClient{
-		client:         provReqClient,
-		provReqLister:  provReqLister,
-		podTemplLister: podTemplLister,
-	}
-}
+	prFactory := externalversions.NewSharedInformerFactory(provReqClient, 1*time.Hour)
+	provReqLister := prFactory.Autoscaling().V1().ProvisioningRequests().Lister()
+	prFactory.Start(ctx.Done())
 
-// newFakePodTemplatesLister creates a fake lister for the Pod Templates in the cluster.
-func newFakePodTemplatesLister(t *testing.T, client kubernetes.Interface, channel <-chan struct{}) (v1.PodTemplateLister, error) {
-	t.Helper()
-	factory := informers.NewSharedInformerFactory(client, 1*time.Hour)
-	podTemplLister := factory.Core().V1().PodTemplates().Lister()
-	factory.Start(channel)
-	informersSynced := factory.WaitForCacheSync(channel)
+	podFactory := informers.NewSharedInformerFactory(podTemplClient, 1*time.Hour)
+	podTemplLister := podFactory.Core().V1().PodTemplates().Lister()
+	podFactory.Start(ctx.Done())
+
+	informersSynced := prFactory.WaitForCacheSync(ctx.Done())
 	for _, synced := range informersSynced {
 		if !synced {
-			return nil, fmt.Errorf("can't create Pod Template lister")
+			t.Fatalf("Failed to sync Provisioning Request informers")
 		}
 	}
-	klog.V(2).Info("Successful initial Pod Template sync")
-	return podTemplLister, nil
+
+	podInformersSynced := podFactory.WaitForCacheSync(ctx.Done())
+	for _, synced := range podInformersSynced {
+		if !synced {
+			t.Fatalf("Failed to sync Pod Template informers")
+		}
+	}
+
+	return NewProvisioningRequestClient(
+		provReqClient,
+		provReqLister,
+		podTemplLister,
+	)
 }
 
 // ProvisioningRequestWrapperForTesting mock ProvisioningRequest for tests.
@@ -106,28 +102,28 @@ func ProvisioningRequestWrapperForTesting(namespace, name string) *provreqwrappe
 			},
 		},
 	}
-	v1Beta1PR := &v1beta1.ProvisioningRequest{
+	v1PR := &v1.ProvisioningRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: v1beta1.ProvisioningRequestSpec{
+		Spec: v1.ProvisioningRequestSpec{
 			ProvisioningClassName: "test-class",
-			PodSets: []v1beta1.PodSet{
+			PodSets: []v1.PodSet{
 				{
 					Count: 1,
-					PodTemplateRef: v1beta1.Reference{
+					PodTemplateRef: v1.Reference{
 						Name: podTemplates[0].Name,
 					},
 				},
 			},
 		},
-		Status: v1beta1.ProvisioningRequestStatus{
-			ProvisioningClassDetails: map[string]v1beta1.Detail{},
+		Status: v1.ProvisioningRequestStatus{
+			ProvisioningClassDetails: map[string]v1.Detail{},
 		},
 	}
 
-	pr := provreqwrapper.NewProvisioningRequest(v1Beta1PR, podTemplates)
+	pr := provreqwrapper.NewProvisioningRequest(v1PR, podTemplates)
 	return pr
 }
 
@@ -139,13 +135,32 @@ func podTemplateNameFromName(name string) string {
 func (c *ProvisioningRequestClient) ProvisioningRequestNoCache(namespace, name string) (*provreqwrapper.ProvisioningRequest, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), provisioningRequestClientCallTimeout)
 	defer cancel()
-	v1beta1, err := c.client.AutoscalingV1beta1().ProvisioningRequests(namespace).Get(ctx, name, metav1.GetOptions{})
+	v1, err := c.client.AutoscalingV1().ProvisioningRequests(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
-	podTemplates, err := c.FetchPodTemplates(v1beta1)
+	podTemplates, err := c.FetchPodTemplates(v1)
 	if err != nil {
 		return nil, err
 	}
-	return provreqwrapper.NewProvisioningRequest(v1beta1, podTemplates), nil
+	return provreqwrapper.NewProvisioningRequest(v1, podTemplates), nil
+}
+
+// ProvisioningRequestsNoCache returns all ProvisioningRequests directly from client. For test purposes only.
+func (c *ProvisioningRequestClient) ProvisioningRequestsNoCache() ([]*provreqwrapper.ProvisioningRequest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), provisioningRequestClientCallTimeout)
+	defer cancel()
+	v1s, err := c.client.AutoscalingV1().ProvisioningRequests("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	prs := make([]*provreqwrapper.ProvisioningRequest, 0, len(v1s.Items))
+	for _, v1 := range v1s.Items {
+		podTemplates, err := c.FetchPodTemplates(&v1)
+		if err != nil {
+			return nil, err
+		}
+		prs = append(prs, provreqwrapper.NewProvisioningRequest(&v1, podTemplates))
+	}
+	return prs, nil
 }

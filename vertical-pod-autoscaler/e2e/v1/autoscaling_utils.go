@@ -31,9 +31,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/e2e/utils"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2edebug "k8s.io/kubernetes/test/e2e/framework/debug"
+	e2eendpointslice "k8s.io/kubernetes/test/e2e/framework/endpointslice"
 	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
 	e2erc "k8s.io/kubernetes/test/e2e/framework/rc"
 	"k8s.io/kubernetes/test/e2e/framework/resource"
@@ -54,16 +56,11 @@ const (
 	port                            = 80
 	targetPort                      = 8080
 	timeoutRC                       = 120 * time.Second
-	startServiceTimeout             = time.Minute
-	startServiceInterval            = 5 * time.Second
-	rcIsNil                         = "ERROR: replicationController = nil"
-	deploymentIsNil                 = "ERROR: deployment = nil"
-	rsIsNil                         = "ERROR: replicaset = nil"
 	invalidKind                     = "ERROR: invalid workload kind for resource consumer"
 	customMetricName                = "QPS"
 	serviceInitializationTimeout    = 2 * time.Minute
 	serviceInitializationInterval   = 15 * time.Second
-	stressImage                     = "gcr.io/google-containers/stress:v1"
+	stressImage                     = "registry.k8s.io/e2e-test-images/agnhost:2.53"
 )
 
 var (
@@ -245,7 +242,7 @@ func (rc *ResourceConsumer) sendConsumeCPURequest(millicores int) {
 	ctx, cancel := context.WithTimeout(context.Background(), framework.SingleCallTimeout)
 	defer cancel()
 
-	err := wait.PollImmediate(serviceInitializationInterval, serviceInitializationTimeout, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, serviceInitializationInterval, serviceInitializationTimeout, true, func(ctx context.Context) (done bool, err error) {
 		proxyRequest, err := e2eservice.GetServicesProxyRequest(rc.clientSet, rc.clientSet.CoreV1().RESTClient().Post())
 		framework.ExpectNoError(err)
 		req := proxyRequest.Namespace(rc.nsName).
@@ -271,7 +268,7 @@ func (rc *ResourceConsumer) sendConsumeMemRequest(megabytes int) {
 	ctx, cancel := context.WithTimeout(context.Background(), framework.SingleCallTimeout)
 	defer cancel()
 
-	err := wait.PollImmediate(serviceInitializationInterval, serviceInitializationTimeout, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, serviceInitializationInterval, serviceInitializationTimeout, true, func(ctx context.Context) (done bool, err error) {
 		proxyRequest, err := e2eservice.GetServicesProxyRequest(rc.clientSet, rc.clientSet.CoreV1().RESTClient().Post())
 		framework.ExpectNoError(err)
 		req := proxyRequest.Namespace(rc.nsName).
@@ -297,7 +294,7 @@ func (rc *ResourceConsumer) sendConsumeCustomMetric(delta int) {
 	ctx, cancel := context.WithTimeout(context.Background(), framework.SingleCallTimeout)
 	defer cancel()
 
-	err := wait.PollImmediate(serviceInitializationInterval, serviceInitializationTimeout, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, serviceInitializationInterval, serviceInitializationTimeout, true, func(ctx context.Context) (done bool, err error) {
 		proxyRequest, err := e2eservice.GetServicesProxyRequest(rc.clientSet, rc.clientSet.CoreV1().RESTClient().Post())
 		framework.ExpectNoError(err)
 		req := proxyRequest.Namespace(rc.nsName).
@@ -361,7 +358,7 @@ func runServiceAndWorkloadForResourceConsumer(c clientset.Interface, ns, name st
 		Namespace:   ns,
 		Timeout:     timeoutRC,
 		Replicas:    replicas,
-		CpuRequest:  cpuRequestMillis,
+		CPURequest:  cpuRequestMillis,
 		MemRequest:  memRequestMb * 1024 * 1024, // MemRequest is in bytes
 		Annotations: podAnnotations,
 	}
@@ -420,8 +417,8 @@ func runServiceAndWorkloadForResourceConsumer(c clientset.Interface, ns, name st
 	framework.ExpectNoError(e2erc.RunRC(context.TODO(), controllerRcConfig))
 
 	// Wait for endpoints to propagate for the controller service.
-	framework.ExpectNoError(framework.WaitForServiceEndpointsNum(
-		context.TODO(), c, ns, controllerName, 1, startServiceInterval, startServiceTimeout))
+	framework.ExpectNoError(e2eendpointslice.WaitForEndpointCount(
+		context.TODO(), c, ns, controllerName, 1))
 }
 
 // runReplicaSet launches (and verifies correctness) of a replicaset.
@@ -439,11 +436,12 @@ func runOomingReplicationController(c clientset.Interface, ns, name string, repl
 		Client: c,
 		Image:  stressImage,
 		// request exactly 1025 MiB, in a single chunk (1 MiB above the limit)
-		Command:     []string{"/stress", "--mem-total", "1074790400", "--logtostderr", "--mem-alloc-size", "1074790400"},
+		Command:     []string{"/agnhost", "stress", "--mem-total", "1074790400", "--mem-alloc-size", "1074790400"},
 		Name:        name,
 		Namespace:   ns,
 		Timeout:     timeoutRC,
 		Replicas:    replicas,
+		Labels:      utils.OOMLabels,
 		Annotations: make(map[string]string),
 		MemRequest:  1024 * 1024 * 1024,
 		MemLimit:    1024 * 1024 * 1024,

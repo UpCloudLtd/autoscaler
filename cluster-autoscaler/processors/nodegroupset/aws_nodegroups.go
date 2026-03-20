@@ -18,7 +18,7 @@ package nodegroupset
 
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 )
 
 // CreateAwsNodeInfoComparator returns a comparator that checks if two nodes should be considered
@@ -32,6 +32,7 @@ func CreateAwsNodeInfoComparator(extraIgnoredLabels []string, ratioOpts config.N
 		"k8s.amazonaws.com/eniConfig":    true, // this is a label used by the AWS CNI for custom networking.
 		"lifecycle":                      true, // this is a label used by the AWS for spot.
 		"topology.ebs.csi.aws.com/zone":  true, // this is a label used by the AWS EBS CSI driver as a target for Persistent Volume Node Affinity
+		"topology.k8s.aws/zone-id":       true, // this is a label used to determine the location of resources in an account relative to those in another one
 	}
 
 	for k, v := range BasicIgnoredLabels {
@@ -42,7 +43,7 @@ func CreateAwsNodeInfoComparator(extraIgnoredLabels []string, ratioOpts config.N
 		awsIgnoredLabels[k] = true
 	}
 
-	return func(n1, n2 *schedulerframework.NodeInfo) bool {
+	return func(n1, n2 *framework.NodeInfo) bool {
 		return IsCloudProviderNodeInfoSimilar(n1, n2, awsIgnoredLabels, ratioOpts)
 	}
 }

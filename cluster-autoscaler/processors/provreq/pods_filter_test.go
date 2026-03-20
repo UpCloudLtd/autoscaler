@@ -23,9 +23,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/pods"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/client-go/tools/record"
@@ -33,7 +33,7 @@ import (
 
 func TestProvisioningRequestPodsFilter(t *testing.T) {
 	prPod1 := BuildTestPod("pr-pod-1", 500, 10)
-	prPod1.Annotations[v1beta1.ProvisioningRequestPodAnnotationKey] = "pr-class"
+	prPod1.Annotations[v1.ProvisioningRequestPodAnnotationKey] = "pr-class"
 
 	prPod2 := BuildTestPod("pr-pod-2", 500, 10)
 	prPod2.Annotations[pods.DeprecatedProvisioningRequestPodAnnotationKey] = "pr-class-2"
@@ -46,31 +46,31 @@ func TestProvisioningRequestPodsFilter(t *testing.T) {
 		expectedUnscheduledPods []*apiv1.Pod
 	}{
 		"ProvisioningRequest consumer is filtered out": {
-			unschedulableCandidates: []*v1.Pod{prPod1, pod1},
-			expectedUnscheduledPods: []*v1.Pod{pod1},
+			unschedulableCandidates: []*corev1.Pod{prPod1, pod1},
+			expectedUnscheduledPods: []*corev1.Pod{pod1},
 		},
 		"Different ProvisioningRequest consumers are filtered out": {
-			unschedulableCandidates: []*v1.Pod{prPod1, prPod2, pod1},
-			expectedUnscheduledPods: []*v1.Pod{pod1},
+			unschedulableCandidates: []*corev1.Pod{prPod1, prPod2, pod1},
+			expectedUnscheduledPods: []*corev1.Pod{pod1},
 		},
 		"No pod is filtered": {
-			unschedulableCandidates: []*v1.Pod{pod1, pod2},
-			expectedUnscheduledPods: []*v1.Pod{pod1, pod2},
+			unschedulableCandidates: []*corev1.Pod{pod1, pod2},
+			expectedUnscheduledPods: []*corev1.Pod{pod1, pod2},
 		},
 		"Empty unschedulable pods list": {
-			unschedulableCandidates: []*v1.Pod{},
-			expectedUnscheduledPods: []*v1.Pod{},
+			unschedulableCandidates: []*corev1.Pod{},
+			expectedUnscheduledPods: []*corev1.Pod{},
 		},
 		"All ProvisioningRequest consumers are filtered out": {
-			unschedulableCandidates: []*v1.Pod{prPod1, prPod2},
-			expectedUnscheduledPods: []*v1.Pod{},
+			unschedulableCandidates: []*corev1.Pod{prPod1, prPod2},
+			expectedUnscheduledPods: []*corev1.Pod{},
 		},
 	}
 	for _, test := range testCases {
 		eventRecorder := record.NewFakeRecorder(10)
-		ctx := &context.AutoscalingContext{AutoscalingKubeClients: context.AutoscalingKubeClients{Recorder: eventRecorder}}
+		autoscalingCtx := &ca_context.AutoscalingContext{AutoscalingKubeClients: ca_context.AutoscalingKubeClients{Recorder: eventRecorder}}
 		filter := NewProvisioningRequestPodsFilter(NewDefautlEventManager())
-		got, _ := filter.Process(ctx, test.unschedulableCandidates)
+		got, _ := filter.Process(autoscalingCtx, test.unschedulableCandidates)
 		assert.ElementsMatch(t, got, test.expectedUnscheduledPods)
 		if len(test.expectedUnscheduledPods) < len(test.expectedUnscheduledPods) {
 			select {
@@ -88,15 +88,15 @@ func TestEventManager(t *testing.T) {
 	eventManager := &defaultEventManager{limit: eventLimit}
 	prFilter := NewProvisioningRequestPodsFilter(eventManager)
 	eventRecorder := record.NewFakeRecorder(10)
-	ctx := &context.AutoscalingContext{AutoscalingKubeClients: context.AutoscalingKubeClients{Recorder: eventRecorder}}
-	unscheduledPods := []*v1.Pod{BuildTestPod("pod", 500, 10)}
+	autoscalingCtx := &ca_context.AutoscalingContext{AutoscalingKubeClients: ca_context.AutoscalingKubeClients{Recorder: eventRecorder}}
+	unscheduledPods := []*corev1.Pod{BuildTestPod("pod", 500, 10)}
 
 	for i := 0; i < 10; i++ {
 		prPod := BuildTestPod(fmt.Sprintf("pr-pod-%d", i), 10, 10)
-		prPod.Annotations[v1beta1.ProvisioningRequestPodAnnotationKey] = "pr-class"
+		prPod.Annotations[v1.ProvisioningRequestPodAnnotationKey] = "pr-class"
 		unscheduledPods = append(unscheduledPods, prPod)
 	}
-	got, err := prFilter.Process(ctx, unscheduledPods)
+	got, err := prFilter.Process(autoscalingCtx, unscheduledPods)
 	assert.NoError(t, err)
 	if len(got) != 1 {
 		t.Errorf("Want 1 unschedulable pod, got: %v", got)

@@ -33,10 +33,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/deletiontracker"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/status"
 	. "k8s.io/autoscaler/cluster-autoscaler/core/test"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 type testIteration struct {
@@ -133,9 +132,9 @@ func TestScheduleDeletion(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			provider := testprovider.NewTestCloudProvider(nil, func(nodeGroup string, node string) error {
+			provider := testprovider.NewTestCloudProviderBuilder().WithOnScaleDown(func(nodeGroup string, node string) error {
 				return nil
-			})
+			}).Build()
 
 			batcher := &countingBatcher{}
 			tracker := deletiontracker.NewNodeDeletionTracker(0)
@@ -148,11 +147,11 @@ func TestScheduleDeletion(t *testing.T) {
 				t.Fatalf("Couldn't create daemonset lister")
 			}
 			registry := kube_util.NewListerRegistry(nil, nil, podLister, pdbLister, dsLister, nil, nil, nil, nil)
-			ctx, err := NewScaleTestAutoscalingContext(opts, fakeClient, registry, provider, nil, nil)
+			autoscalingCtx, err := NewScaleTestAutoscalingContext(opts, fakeClient, registry, provider, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Couldn't set up autoscaling context: %v", err)
 			}
-			scheduler := NewGroupDeletionScheduler(&ctx, tracker, batcher, Evictor{EvictionRetryTime: 0, PodEvictionHeadroom: DefaultPodEvictionHeadroom})
+			scheduler := NewGroupDeletionScheduler(&autoscalingCtx, tracker, batcher, Evictor{EvictionRetryTime: 0, PodEvictionHeadroom: DefaultPodEvictionHeadroom})
 
 			for i, ti := range tc.iterations {
 				allBuckets := append(append(ti.toSchedule, ti.toAbort...), ti.toScheduleAfterAbort...)
@@ -174,7 +173,7 @@ func TestScheduleDeletion(t *testing.T) {
 				for _, bucket := range ti.toAbort {
 					for _, node := range bucket.Nodes {
 						nodeDeleteResult := status.NodeDeleteResult{ResultType: status.NodeDeleteErrorFailedToDelete, Err: cmpopts.AnyError}
-						scheduler.AbortNodeDeletion(node, bucket.Group.Id(), false, "simulated abort", nodeDeleteResult)
+						scheduler.AbortNodeDeletionDueToError(node, bucket.Group.Id(), false, "simulated abort", nodeDeleteResult)
 					}
 				}
 				if err := scheduleAll(ti.toScheduleAfterAbort, scheduler); err != nil {
@@ -215,16 +214,10 @@ func scheduleAll(toSchedule []*budgets.NodeGroupView, scheduler *GroupDeletionSc
 			return fmt.Errorf("failed to get target size for node group %q: %s", bucket.Group.Id(), err)
 		}
 		for _, node := range bucket.Nodes {
-			scheduler.ScheduleDeletion(infoForNode(node), bucket.Group, bucketSize, false)
+			scheduler.ScheduleDeletion(framework.NewTestNodeInfo(node), bucket.Group, bucketSize, false)
 		}
 	}
 	return nil
-}
-
-func infoForNode(n *apiv1.Node) *framework.NodeInfo {
-	info := schedulerframework.NewNodeInfo()
-	info.SetNode(n)
-	return info
 }
 
 func mergeLists(lists ...[]*budgets.NodeGroupView) []*budgets.NodeGroupView {

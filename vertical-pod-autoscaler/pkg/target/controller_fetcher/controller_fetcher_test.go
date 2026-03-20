@@ -17,12 +17,13 @@ limitations under the License.
 package controllerfetcher
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -48,8 +49,10 @@ const (
 	testReplicationController = "test-rc"
 )
 
-var wellKnownControllers = []wellKnownController{daemonSet, deployment, replicaSet, statefulSet, replicationController, job, cronJob}
-var trueVar = true
+var (
+	wellKnownControllers = []wellKnownController{daemonSet, deployment, replicaSet, statefulSet, replicationController, job, cronJob}
+	trueVar              = true
+)
 
 func simpleControllerFetcher() *controllerFetcher {
 	f := controllerFetcher{}
@@ -76,13 +79,12 @@ func simpleControllerFetcher() *controllerFetcher {
 	// return not found if if tries to find the scale subresource on bah
 	scaleNamespacer.AddReactor("get", "bah", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		groupResource := schema.GroupResource{}
-		error := apierrors.NewNotFound(groupResource, "Foo")
-		return true, nil, error
+		err = apierrors.NewNotFound(groupResource, "Foo")
+		return true, nil, err
 	})
 
 	// resource that can scale
 	scaleNamespacer.AddReactor("get", "iCanScale", func(action core.Action) (handled bool, ret runtime.Object, err error) {
-
 		ret = &autoscalingv1.Scale{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "Scaler",
@@ -310,7 +312,7 @@ func TestControllerFetcher(t *testing.T) {
 				},
 			}},
 			expectedKey:   nil,
-			expectedError: fmt.Errorf("Cycle detected in ownership chain"),
+			expectedError: errors.New("cycle detected in ownership chain"),
 		},
 		{
 			name: "deployment, parent with no scale subresource",
@@ -387,7 +389,7 @@ func TestControllerFetcher(t *testing.T) {
 				},
 			}},
 			expectedKey:   nil,
-			expectedError: fmt.Errorf("Unhandled targetRef v1 / Node / node, last error node is not a valid owner"),
+			expectedError: fmt.Errorf("unhandled targetRef v1 / Node / node, last error %w", ErrNodeInvalidOwner),
 		},
 		{
 			name: "custom resource with no scale subresource",
@@ -405,7 +407,7 @@ func TestControllerFetcher(t *testing.T) {
 			for _, obj := range tc.objects {
 				addController(t, f, obj)
 			}
-			topMostWellKnownOrScalableController, err := f.FindTopMostWellKnownOrScalable(tc.key)
+			topMostWellKnownOrScalableController, err := f.FindTopMostWellKnownOrScalable(context.Background(), tc.key)
 			if tc.expectedKey == nil {
 				assert.Nil(t, topMostWellKnownOrScalableController)
 			} else {

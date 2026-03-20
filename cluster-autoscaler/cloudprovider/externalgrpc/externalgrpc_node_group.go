@@ -23,13 +23,14 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
+
 	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/externalgrpc/protos"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // NodeGroup implements cloudprovider.NodeGroup interface. NodeGroup contains
@@ -44,7 +45,7 @@ type NodeGroup struct {
 	grpcTimeout time.Duration
 
 	mutex    sync.Mutex
-	nodeInfo **schedulerframework.NodeInfo // used to cache NodeGroupTemplateNodeInfo() grpc calls
+	nodeInfo **framework.NodeInfo // used to cache NodeGroupTemplateNodeInfo() grpc calls
 }
 
 // MaxSize returns maximum size of the node group.
@@ -122,6 +123,11 @@ func (n *NodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	return nil
 }
 
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (n *NodeGroup) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	return cloudprovider.ErrNotImplemented
+}
+
 // DecreaseTargetSize decreases the target size of the node group. This function
 // doesn't permit to delete any existing node and can be used only to reduce the
 // request for new nodes that have not been yet fulfilled. Delta should be negative.
@@ -188,7 +194,7 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 	return instances, nil
 }
 
-// TemplateNodeInfo returns a schedulerframework.NodeInfo structure of an empty
+// TemplateNodeInfo returns a framework.NodeInfo structure of an empty
 // (as if just started) node. This will be used in scale-up simulations to
 // predict what would a new node look like if a node group was expanded. The
 // returned NodeInfo is expected to have a fully populated Node object, with
@@ -200,7 +206,7 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 // complex approach and does not cover all the scenarios. For the sake of simplicity,
 // the `nodeInfo` is defined as a Kubernetes `k8s.io.api.core.v1.Node` type
 // where the system could still extract certain info about the node.
-func (n *NodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (n *NodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
 
@@ -222,13 +228,18 @@ func (n *NodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
 		klog.V(1).Infof("Error on gRPC call NodeGroupTemplateNodeInfo: %v", err)
 		return nil, err
 	}
-	pbNodeInfo := res.GetNodeInfo()
+	var pbNodeInfo *apiv1.Node
+	if pbNodeBytes := res.GetNodeBytes(); pbNodeBytes != nil {
+		pbNodeInfo = &apiv1.Node{}
+		if err := pbNodeInfo.Unmarshal(pbNodeBytes); err != nil {
+			return nil, err
+		}
+	}
 	if pbNodeInfo == nil {
-		n.nodeInfo = new(*schedulerframework.NodeInfo)
+		n.nodeInfo = new(*framework.NodeInfo)
 		return nil, nil
 	}
-	nodeInfo := schedulerframework.NewNodeInfo()
-	nodeInfo.SetNode(pbNodeInfo)
+	nodeInfo := framework.NewNodeInfo(pbNodeInfo, nil)
 	n.nodeInfo = &nodeInfo
 	return nodeInfo, nil
 }
@@ -270,15 +281,11 @@ func (n *NodeGroup) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*co
 		Defaults: &protos.NodeGroupAutoscalingOptions{
 			ScaleDownUtilizationThreshold:    defaults.ScaleDownUtilizationThreshold,
 			ScaleDownGpuUtilizationThreshold: defaults.ScaleDownGpuUtilizationThreshold,
-			ScaleDownUnneededTime: &metav1.Duration{
-				Duration: defaults.ScaleDownUnneededTime,
-			},
-			ScaleDownUnreadyTime: &metav1.Duration{
-				Duration: defaults.ScaleDownUnreadyTime,
-			},
-			MaxNodeProvisionTime: &metav1.Duration{
-				Duration: defaults.MaxNodeProvisionTime,
-			},
+			ScaleDownUnneededDuration:        durationpb.New(defaults.ScaleDownUnneededTime),
+			ScaleDownUnreadyDuration:         durationpb.New(defaults.ScaleDownUnreadyTime),
+			MaxNodeProvisionDuration:         durationpb.New(defaults.MaxNodeProvisionTime),
+			ZeroOrMaxNodeScaling:             defaults.ZeroOrMaxNodeScaling,
+			IgnoreDaemonSetsUtilization:      defaults.IgnoreDaemonSetsUtilization,
 		},
 	})
 	if err != nil {
@@ -293,12 +300,30 @@ func (n *NodeGroup) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*co
 	if pbOpts == nil {
 		return nil, nil
 	}
+
+	var scaleDownUnneededTime time.Duration
+	if d := pbOpts.GetScaleDownUnneededDuration(); d != nil {
+		scaleDownUnneededTime = d.AsDuration()
+	}
+
+	var scaleDownUnreadyTime time.Duration
+	if d := pbOpts.GetScaleDownUnreadyDuration(); d != nil {
+		scaleDownUnreadyTime = d.AsDuration()
+	}
+
+	var maxNodeProvisionTime time.Duration
+	if d := pbOpts.GetMaxNodeProvisionDuration(); d != nil {
+		maxNodeProvisionTime = d.AsDuration()
+	}
+
 	opts := &config.NodeGroupAutoscalingOptions{
 		ScaleDownUtilizationThreshold:    pbOpts.GetScaleDownUtilizationThreshold(),
 		ScaleDownGpuUtilizationThreshold: pbOpts.GetScaleDownGpuUtilizationThreshold(),
-		ScaleDownUnneededTime:            pbOpts.GetScaleDownUnneededTime().Duration,
-		ScaleDownUnreadyTime:             pbOpts.GetScaleDownUnreadyTime().Duration,
-		MaxNodeProvisionTime:             pbOpts.GetMaxNodeProvisionTime().Duration,
+		ScaleDownUnneededTime:            scaleDownUnneededTime,
+		ScaleDownUnreadyTime:             scaleDownUnreadyTime,
+		MaxNodeProvisionTime:             maxNodeProvisionTime,
+		ZeroOrMaxNodeScaling:             pbOpts.GetZeroOrMaxNodeScaling(),
+		IgnoreDaemonSetsUtilization:      pbOpts.GetIgnoreDaemonSetsUtilization(),
 	}
 	return opts, nil
 }

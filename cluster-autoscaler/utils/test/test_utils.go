@@ -23,12 +23,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	kube_types "k8s.io/kubernetes/pkg/kubelet/types"
 )
 
@@ -89,6 +91,35 @@ func AddSchedulerName(schedulerName string) func(*apiv1.Pod) {
 	}
 }
 
+// WithResourceClaim adds a reference to the given resource claim/claim template to a pod.
+func WithResourceClaim(refName, claimName, templateName string) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		claimRef := apiv1.PodResourceClaim{
+			Name: refName,
+		}
+		claimStatus := apiv1.PodResourceClaimStatus{
+			Name: refName,
+		}
+
+		if templateName != "" {
+			claimRef.ResourceClaimTemplateName = &templateName
+			claimStatus.ResourceClaimName = &claimName
+		} else {
+			claimRef.ResourceClaimName = &claimName
+		}
+
+		pod.Spec.ResourceClaims = append(pod.Spec.ResourceClaims, claimRef)
+		pod.Status.ResourceClaimStatuses = append(pod.Status.ResourceClaimStatuses, claimStatus)
+	}
+}
+
+// WithControllerOwnerRef sets an owner reference to the pod.
+func WithControllerOwnerRef(name, kind string, uid types.UID) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.OwnerReferences = GenerateOwnerReferences(name, kind, "apps/v1", uid)
+	}
+}
+
 // WithDSController creates a daemonSet owner ref for the pod.
 func WithDSController() func(*apiv1.Pod) {
 	return func(pod *apiv1.Pod) {
@@ -130,8 +161,8 @@ func WithHostPort(hostport int32) func(*apiv1.Pod) {
 	}
 }
 
-// WithMaxSkew sets a namespace to the pod.
-func WithMaxSkew(maxSkew int32, topologySpreadingKey string) func(*apiv1.Pod) {
+// WithMaxSkew sets a topology spread constraint to the pod.
+func WithMaxSkew(maxSkew int32, topologySpreadingKey string, minDomains int32) func(*apiv1.Pod) {
 	return func(pod *apiv1.Pod) {
 		if maxSkew > 0 {
 			pod.Spec.TopologySpreadConstraints = []apiv1.TopologySpreadConstraint{
@@ -144,9 +175,17 @@ func WithMaxSkew(maxSkew int32, topologySpreadingKey string) func(*apiv1.Pod) {
 							"app": "estimatee",
 						},
 					},
+					MinDomains: &minDomains,
 				},
 			}
 		}
+	}
+}
+
+// WithCreationTimestamp sets creation timestamp to the pod.
+func WithCreationTimestamp(timestamp time.Time) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.CreationTimestamp = metav1.Time{Time: timestamp}
 	}
 }
 
@@ -154,6 +193,48 @@ func WithMaxSkew(maxSkew int32, topologySpreadingKey string) func(*apiv1.Pod) {
 func WithDeletionTimestamp(deletionTimestamp time.Time) func(*apiv1.Pod) {
 	return func(pod *apiv1.Pod) {
 		pod.DeletionTimestamp = &metav1.Time{Time: deletionTimestamp}
+	}
+}
+
+// WithNodeNamesAffinity sets pod's affinity for specific nodes.
+func WithNodeNamesAffinity(nodeNames ...string) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.Spec.Affinity = &apiv1.Affinity{
+			NodeAffinity: &apiv1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+					NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+						{
+							MatchFields: []apiv1.NodeSelectorRequirement{
+								{
+									Key:      metav1.ObjectNameField,
+									Operator: apiv1.NodeSelectorOpIn,
+									Values:   nodeNames,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+}
+
+// WithPodHostnameAntiAffinity sets pod's anti-affinity for pods matching the given labels at hostname topology level.
+func WithPodHostnameAntiAffinity(labels map[string]string) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		if pod.Spec.Affinity == nil {
+			pod.Spec.Affinity = &apiv1.Affinity{}
+		}
+		pod.Spec.Affinity.PodAntiAffinity = &apiv1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
+				{
+					LabelSelector: &metav1.LabelSelector{
+						MatchLabels: labels,
+					},
+					TopologyKey: "kubernetes.io/hostname",
+				},
+			},
+		}
 	}
 }
 
@@ -265,8 +346,18 @@ func TolerateGpuForPod(pod *apiv1.Pod) {
 	pod.Spec.Tolerations = append(pod.Spec.Tolerations, apiv1.Toleration{Key: resourceNvidiaGPU, Operator: apiv1.TolerationOpExists})
 }
 
+// NodeOption is a function that modifies a Node during construction.
+type NodeOption func(*apiv1.Node)
+
+// IsReady sets the node to a Ready state.
+func IsReady(ready bool) NodeOption {
+	return func(node *apiv1.Node) {
+		SetNodeReadyState(node, ready, time.Now())
+	}
+}
+
 // BuildTestNode creates a node with specified capacity.
-func BuildTestNode(name string, millicpuCapacity int64, memCapacity int64) *apiv1.Node {
+func BuildTestNode(name string, millicpuCapacity int64, memCapacity int64, opts ...NodeOption) *apiv1.Node {
 	node := &apiv1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:     name,
@@ -295,7 +386,48 @@ func BuildTestNode(name string, millicpuCapacity int64, memCapacity int64) *apiv
 		node.Status.Allocatable[k] = v
 	}
 
+	for _, opt := range opts {
+		opt(node)
+	}
+
 	return node
+}
+
+// BuildCSINode returns a CSINode object given a node object
+func BuildCSINode(node *apiv1.Node) *storagev1.CSINode {
+	return &storagev1.CSINode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: node.Name,
+			UID:  types.UID("csi-node" + node.UID),
+		},
+		Spec: storagev1.CSINodeSpec{
+			Drivers: []storagev1.CSINodeDriver{
+				{
+					Name:         "ebs.csi.aws.com",
+					NodeID:       string(node.UID),
+					TopologyKeys: []string{"topology.ebs.csi.aws.com/zone"},
+				},
+			},
+		},
+	}
+}
+
+// WithSchedulingGatedStatus upserts the condition with type PodScheduled to be of status false
+// and reason PodReasonSchedulingGated
+func WithSchedulingGatedStatus(pod *apiv1.Pod) *apiv1.Pod {
+	gatedPodCondition := apiv1.PodCondition{
+		Type:   apiv1.PodScheduled,
+		Status: apiv1.ConditionFalse,
+		Reason: apiv1.PodReasonSchedulingGated,
+	}
+	for index := range pod.Status.Conditions {
+		if pod.Status.Conditions[index].Type == apiv1.PodScheduled {
+			pod.Status.Conditions[index] = gatedPodCondition
+			return pod
+		}
+	}
+	pod.Status.Conditions = append(pod.Status.Conditions, gatedPodCondition)
+	return pod
 }
 
 // WithAllocatable adds specified milliCpu and memory to Allocatable of the node in-place.
@@ -336,20 +468,6 @@ func AddGpuLabelToNode(node *apiv1.Node) {
 // GetGPULabel return GPULabel on the node. This is only used in unit tests.
 func GetGPULabel() string {
 	return gpuLabel
-}
-
-// GetGpuConfigFromNode returns the GPU of the node if it has one. This is only used in unit tests.
-func GetGpuConfigFromNode(node *apiv1.Node) *cloudprovider.GpuConfig {
-	gpuType, hasGpuLabel := node.Labels[gpuLabel]
-	gpuAllocatable, hasGpuAllocatable := node.Status.Allocatable[resourceNvidiaGPU]
-	if hasGpuLabel || (hasGpuAllocatable && !gpuAllocatable.IsZero()) {
-		return &cloudprovider.GpuConfig{
-			Label:        gpuLabel,
-			Type:         gpuType,
-			ResourceName: resourceNvidiaGPU,
-		}
-	}
-	return nil
 }
 
 // SetNodeReadyState sets node ready state to either ConditionTrue or ConditionFalse.
@@ -517,4 +635,12 @@ func (l *HttpServerMock) handle(req *http.Request, w http.ResponseWriter, server
 		}
 	}
 	return response
+}
+
+// IgnoreObjectOrder returns a cmp.Option that ignores the order of elements when comparing slices of K8s objects of type T,
+// depending on their GetName() function for sorting.
+func IgnoreObjectOrder[T interface{ GetName() string }]() cmp.Option {
+	return cmpopts.SortSlices(func(c1, c2 T) bool {
+		return c1.GetName() < c2.GetName()
+	})
 }

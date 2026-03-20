@@ -21,10 +21,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/testsnapshot"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/test"
 )
@@ -108,15 +109,16 @@ func TestFilterOutExpendable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			processor := NewFilterOutExpendablePodListProcessor()
-			snapshot := clustersnapshot.NewBasicClusterSnapshot()
-			snapshot.AddNodes(tc.nodes)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			err := snapshot.SetClusterState(tc.nodes, nil, nil, nil)
+			assert.NoError(t, err)
 
-			pods, err := processor.Process(&context.AutoscalingContext{
+			pods, err := processor.Process(&ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				AutoscalingOptions: config.AutoscalingOptions{
 					ExpendablePodsPriorityCutoff: tc.priorityCutoff,
 				},
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: newMockListerRegistry(tc.nodes),
 				},
 			}, tc.pods)
@@ -125,13 +127,12 @@ func TestFilterOutExpendable(t *testing.T) {
 			assert.ElementsMatch(t, tc.wantPods, pods)
 
 			var podsInSnapshot []*apiv1.Pod
-			nodeInfoLister := snapshot.NodeInfos()
 			// Get pods in snapshot
 			for _, n := range tc.nodes {
-				nodeInfo, err := nodeInfoLister.Get(n.Name)
+				nodeInfo, err := snapshot.GetNodeInfo(n.Name)
 				assert.NoError(t, err)
-				assert.NotEqual(t, nodeInfo.Pods, nil)
-				for _, podInfo := range nodeInfo.Pods {
+				assert.NotEqual(t, nodeInfo.Pods(), nil)
+				for _, podInfo := range nodeInfo.Pods() {
 					podsInSnapshot = append(podsInSnapshot, podInfo.Pod)
 				}
 			}

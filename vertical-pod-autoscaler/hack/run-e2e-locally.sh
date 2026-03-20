@@ -17,13 +17,19 @@
 set -o nounset
 set -o pipefail
 
-SCRIPT_ROOT=$(dirname ${BASH_SOURCE})/..
+BASE_NAME=$(basename "$0")
+SCRIPT_ROOT=$(dirname "${BASH_SOURCE}")/..
+KIND_CONFIG="${SCRIPT_ROOT}/../.github/kind-config.yaml"
 
 function print_help {
-  echo "ERROR! Usage: run-e2e.sh <suite>"
+  echo "ERROR! Usage: $BASE_NAME <suite>"
   echo "<suite> should be one of:"
   echo " - recommender"
   echo " - recommender-externalmetrics"
+  echo " - updater"
+  echo " - admission-controller"
+  echo " - actuation"
+  echo " - full-vpa"
 }
 
 if [ $# -eq 0 ]; then
@@ -37,29 +43,88 @@ if [ $# -gt 1 ]; then
 fi
 
 SUITE=$1
+REQUIRED_COMMANDS="
+docker
+go
+helm
+kind
+kubectl
+make
+"
+
+for i in $REQUIRED_COMMANDS; do
+  if ! command -v $i > /dev/null 2>&1
+  then
+    echo "$i could not be found, please ensure it is installed"
+    echo
+    echo "The following commands are required to run these tests:"
+    echo $REQUIRED_COMMANDS
+    exit 1;
+  fi
+done
+
+if ! docker ps >/dev/null 2>&1
+then
+  echo "docker isn't running"
+  echo
+  echo "Please ensure that docker is running"
+  exit 1
+fi
+
+# Clean up before exit
+function cleanup {
+  echo " ** Cleaning up..."
+  helm uninstall vpa --namespace kube-system 2>/dev/null || true
+  kubectl delete namespace monitoring --ignore-not-found=true 2>/dev/null || true
+}
+trap cleanup EXIT
 
 echo "Deleting KIND cluster 'kind'."
 kind delete cluster -n kind -q
 
-echo "Creating KIND cluster 'kind' with builtin registry."
-${SCRIPT_ROOT}/hack/e2e/kind-with-registry.sh
+if [ ! -f "${KIND_CONFIG}" ]; then
+  echo "Missing KIND config file: ${KIND_CONFIG}"
+  exit 1
+fi
 
-echo "Building metrics-pump image"
-docker build -t localhost:5001/write-metrics:dev -f ${SCRIPT_ROOT}/hack/e2e/Dockerfile.externalmetrics-writer ${SCRIPT_ROOT}/hack
-echo "  pushing image to local registry"
-docker push localhost:5001/write-metrics:dev
+echo "Creating KIND cluster 'kind'"
+if ! kind create cluster --config "${KIND_CONFIG}"; then
+    echo "Failed to create KIND cluster using ${KIND_CONFIG}. Exiting."
+    exit 1
+fi
+
+# Build and deploy external metrics writer if needed
+if [[ "${SUITE}" == "recommender-externalmetrics" ]]; then
+  echo " ** Building external metrics writer image"
+  docker build -t localhost:5001/write-metrics:dev -f "${SCRIPT_ROOT}"/hack/e2e/Dockerfile.externalmetrics-writer "${SCRIPT_ROOT}"/hack
+  kind load docker-image localhost:5001/write-metrics:dev
+fi
+
+export FEATURE_GATES=""
+export TEST_WITH_FEATURE_GATES_ENABLED=""
+
+if [ "${ENABLE_ALL_FEATURE_GATES:-}" == "true" ] ; then
+  export FEATURE_GATES='AllAlpha=true,AllBeta=true'
+  export TEST_WITH_FEATURE_GATES_ENABLED="true"
+fi
 
 case ${SUITE} in
-  recommender|recommender-externalmetrics)
-    ${SCRIPT_ROOT}/hack/vpa-down.sh
-    echo " ** Deploying for suite ${SUITE}"
-    ${SCRIPT_ROOT}/hack/deploy-for-e2e-locally.sh ${SUITE}
+  recommender|recommender-externalmetrics|updater|admission-controller|actuation|full-vpa)
+    # Checking if user specified artifact directory to dump logs
+    if [[ -z "${ARTIFACTS:-}" ]]; then
+      # Create temp dir for artifacts
+      ARTIFACTS=$(mktemp -d)
+      echo " ** Log artifacts will be stored in ${ARTIFACTS}"
+    fi
 
-    echo " ** Running suite ${SUITE}"
-    if [ ${SUITE} == recommender-externalmetrics ]; then
-       ${SCRIPT_ROOT}/hack/run-e2e-tests.sh recommender
-    else
-      ${SCRIPT_ROOT}/hack/run-e2e-tests.sh ${SUITE}
+    echo " ** Deploying VPA components..."
+    "${SCRIPT_ROOT}"/hack/deploy-for-e2e-locally.sh "${SUITE}"
+
+    echo " ** Running E2E tests..."
+    if [ "${SUITE}" == recommender-externalmetrics ]; then
+       ARTIFACTS="${ARTIFACTS}" "${SCRIPT_ROOT}"/hack/run-e2e-tests.sh recommender
+    else 
+       ARTIFACTS="${ARTIFACTS}" "${SCRIPT_ROOT}"/hack/run-e2e-tests.sh "${SUITE}"
     fi
     ;;
   *)
@@ -67,4 +132,3 @@ case ${SUITE} in
     exit 1
     ;;
 esac
-

@@ -17,7 +17,9 @@ limitations under the License.
 package vpa
 
 import (
-	core "k8s.io/api/core/v1"
+	"context"
+
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 
@@ -31,7 +33,7 @@ import (
 // Matcher is capable of returning a single matching VPA object
 // for a pod. Will return nil if no matching object is found.
 type Matcher interface {
-	GetMatchingVPA(pod *core.Pod) *vpa_types.VerticalPodAutoscaler
+	GetMatchingVPA(ctx context.Context, pod *corev1.Pod) *vpa_types.VerticalPodAutoscaler
 }
 
 type matcher struct {
@@ -49,31 +51,48 @@ func NewMatcher(vpaLister vpa_lister.VerticalPodAutoscalerLister,
 		controllerFetcher: controllerFetcher}
 }
 
-func (m *matcher) GetMatchingVPA(pod *core.Pod) *vpa_types.VerticalPodAutoscaler {
-	configs, err := m.vpaLister.VerticalPodAutoscalers(pod.Namespace).List(labels.Everything())
+func (m *matcher) GetMatchingVPA(ctx context.Context, pod *corev1.Pod) *vpa_types.VerticalPodAutoscaler {
+	parentController, err := vpa_api_util.FindParentControllerForPod(ctx, pod, m.controllerFetcher)
 	if err != nil {
-		klog.Errorf("failed to get vpa configs: %v", err)
+		klog.ErrorS(err, "Failed to get parent controller for pod", "pod", klog.KObj(pod))
 		return nil
 	}
-	onConfigs := make([]*vpa_api_util.VpaWithSelector, 0)
+	if parentController == nil {
+		return nil
+	}
+
+	configs, err := m.vpaLister.VerticalPodAutoscalers(pod.Namespace).List(labels.Everything())
+	if err != nil {
+		klog.ErrorS(err, "Failed to get vpa configs")
+		return nil
+	}
+
+	var controllingVpa *vpa_types.VerticalPodAutoscaler
 	for _, vpaConfig := range configs {
-		if vpa_api_util.GetUpdateMode(vpaConfig) == vpa_types.UpdateModeOff {
+		if vpa_api_util.GetUpdateMode(vpaConfig) == vpa_types.UpdateModeOff && vpaConfig.Spec.StartupBoost == nil {
 			continue
 		}
-		selector, err := m.selectorFetcher.Fetch(vpaConfig)
+		if vpaConfig.Spec.TargetRef == nil {
+			klog.V(5).InfoS("Skipping VPA object because targetRef is not defined. If this is a v1beta1 object, switch to v1", "vpa", klog.KObj(vpaConfig))
+			continue
+		}
+		if vpaConfig.Spec.TargetRef.Kind != parentController.Kind ||
+			vpaConfig.Namespace != parentController.Namespace ||
+			vpaConfig.Spec.TargetRef.Name != parentController.Name {
+			continue // This pod is not associated to the right controller
+		}
+
+		selector, err := m.selectorFetcher.Fetch(ctx, vpaConfig)
 		if err != nil {
-			klog.V(3).Infof("skipping VPA object %s because we cannot fetch selector: %s", klog.KObj(vpaConfig), err)
+			klog.V(3).InfoS("Skipping VPA object because we cannot fetch selector", "vpa", klog.KObj(vpaConfig), "error", err)
 			continue
 		}
-		onConfigs = append(onConfigs, &vpa_api_util.VpaWithSelector{
-			Vpa:      vpaConfig,
-			Selector: selector,
-		})
+
+		vpaWithSelector := &vpa_api_util.VpaWithSelector{Vpa: vpaConfig, Selector: selector}
+		if vpa_api_util.PodMatchesVPA(pod, vpaWithSelector) && vpa_api_util.Stronger(vpaConfig, controllingVpa) {
+			controllingVpa = vpaConfig
+		}
 	}
-	klog.V(2).Infof("Let's choose from %d configs for pod %s", len(onConfigs), klog.KObj(pod))
-	result := vpa_api_util.GetControllingVPAForPod(pod, onConfigs, m.controllerFetcher)
-	if result != nil {
-		return result.Vpa
-	}
-	return nil
+
+	return controllingVpa
 }

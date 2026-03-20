@@ -18,16 +18,18 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
-	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/Azure/skewer"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v8"
+	skewer "github.com/Azure/skewer/v2"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	providerazureconsts "sigs.k8s.io/cloud-provider-azure/pkg/consts"
 
 	"k8s.io/klog/v2"
 )
@@ -65,20 +67,25 @@ type azureCache struct {
 
 	// Cache content.
 
-	// resourceGroup specifies the name of the resource group that this cache tracks
-	resourceGroup string
+	// resourceGroup specifies the name of the node resource group that this cache tracks
+	resourceGroup        string
+	clusterResourceGroup string
+	clusterName          string
+
+	// enableVMsAgentPool specifies whether VMs agent pool type is supported.
+	enableVMsAgentPool bool
 
 	// vmType can be one of vmTypeVMSS (default), vmTypeStandard
 	vmType string
 
-	vmsPoolSet map[string]struct{} // track the nodepools that're vms pool
+	vmsPoolMap map[string]armcontainerservice.AgentPool // track the nodepools that're vms pool
 
 	// scaleSets keeps the set of all known scalesets in the resource group, populated/refreshed via VMSS.List() call.
 	// It is only used/populated if vmType is vmTypeVMSS (default).
-	scaleSets map[string]compute.VirtualMachineScaleSet
+	scaleSets map[string]*armcompute.VirtualMachineScaleSet
 	// virtualMachines keeps the set of all VMs in the resource group.
 	// It is only used/populated if vmType is vmTypeStandard.
-	virtualMachines map[string][]compute.VirtualMachine
+	virtualMachines map[string][]*armcompute.VirtualMachine
 
 	// registeredNodeGroups represents all known NodeGroups.
 	registeredNodeGroups []cloudprovider.NodeGroup
@@ -95,52 +102,63 @@ type azureCache struct {
 	unownedInstances map[azureRef]bool
 
 	autoscalingOptions map[azureRef]map[string]string
-	skus               map[string]*skewer.Cache
+	skus               *skewer.Cache
 }
 
 func newAzureCache(client *azClient, cacheTTL time.Duration, config Config) (*azureCache, error) {
+	nodeResourceGroup := config.ResourceGroup
+	// Hosted (on-behalf-of) system pool node resources are in the AKS internal resource group within AME tenants,
+	// which differs from the MC_* resource group found in the customer subscription.
+	if config.HostedResourceGroup != "" {
+		nodeResourceGroup = config.HostedResourceGroup
+	}
 	cache := &azureCache{
 		interrupt:            make(chan struct{}),
 		azClient:             client,
 		refreshInterval:      cacheTTL,
-		resourceGroup:        config.ResourceGroup,
+		resourceGroup:        nodeResourceGroup,
+		clusterResourceGroup: config.ClusterResourceGroup,
+		clusterName:          config.ClusterName,
+		enableVMsAgentPool:   config.EnableVMsAgentPool,
 		vmType:               config.VMType,
-		vmsPoolSet:           make(map[string]struct{}),
-		scaleSets:            make(map[string]compute.VirtualMachineScaleSet),
-		virtualMachines:      make(map[string][]compute.VirtualMachine),
+		vmsPoolMap:           make(map[string]armcontainerservice.AgentPool),
+		scaleSets:            make(map[string]*armcompute.VirtualMachineScaleSet),
+		virtualMachines:      make(map[string][]*armcompute.VirtualMachine),
 		registeredNodeGroups: make([]cloudprovider.NodeGroup, 0),
 		instanceToNodeGroup:  make(map[azureRef]cloudprovider.NodeGroup),
 		unownedInstances:     make(map[azureRef]bool),
 		autoscalingOptions:   make(map[azureRef]map[string]string),
-		skus:                 make(map[string]*skewer.Cache),
-	}
-
-	if config.EnableDynamicInstanceList {
-		cache.skus[config.Location] = &skewer.Cache{}
+		skus:                 &skewer.Cache{}, // populated iff config.EnableDynamicInstanceList
 	}
 
 	if err := cache.regenerate(); err != nil {
 		klog.Errorf("Error while regenerating Azure cache: %v", err)
 	}
 
+	if config.EnableDynamicInstanceList {
+		if err := cache.fetchSKUCache(config.Location); err != nil {
+			klog.Errorf("Error while populating SKU list: %v", err)
+		}
+	}
+
 	return cache, nil
 }
 
-func (m *azureCache) getVMsPoolSet() map[string]struct{} {
+func (m *azureCache) getVMsPoolMap() map[string]armcontainerservice.AgentPool {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	return m.vmsPoolSet
+	return m.vmsPoolMap
 }
 
-func (m *azureCache) getVirtualMachines() map[string][]compute.VirtualMachine {
+func (m *azureCache) getVirtualMachines() map[string][]*armcompute.VirtualMachine {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	return m.virtualMachines
 }
 
-func (m *azureCache) getScaleSets() map[string]compute.VirtualMachineScaleSet {
+func (m *azureCache) getScaleSets() map[string]*armcompute.VirtualMachineScaleSet {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -166,7 +184,7 @@ func (m *azureCache) regenerate() error {
 		if err != nil {
 			return err
 		}
-		klog.V(4).Infof("regenerate: found nodes for node group %s: %+v", ng.Id(), instances)
+		klog.V(4).Infof("regenerate: found %d nodes for node group %s: %+v", len(instances), ng.Id(), instances)
 
 		for _, instance := range instances {
 			ref := azureRef{Name: instance.Id}
@@ -185,25 +203,27 @@ func (m *azureCache) regenerate() error {
 		newAutoscalingOptions[ref] = options
 	}
 
-	newSkuCache := make(map[string]*skewer.Cache)
-	for location := range m.skus {
-		cache, err := m.fetchSKUs(context.Background(), location)
-		if err != nil {
-			return err
-		}
-		newSkuCache[location] = cache
-	}
-
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	m.instanceToNodeGroup = newInstanceToNodeGroupCache
 	m.autoscalingOptions = newAutoscalingOptions
-	m.skus = newSkuCache
 
 	// Reset unowned instances cache.
 	m.unownedInstances = make(map[azureRef]bool)
 
+	return nil
+}
+
+func (m *azureCache) fetchSKUCache(location string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	cache, err := m.fetchSKUs(context.Background(), location)
+	if err != nil {
+		return err
+	}
+	m.skus = cache
 	return nil
 }
 
@@ -226,13 +246,20 @@ func (m *azureCache) fetchAzureResources() error {
 		return err
 	}
 	m.scaleSets = vmssResult
-	vmResult, vmsPoolSet, err := m.fetchVirtualMachines()
+	vmResult, err := m.fetchVirtualMachines()
 	if err != nil {
 		return err
 	}
 	// we fetch both sets of resources since CAS may operate on mixed nodepools
 	m.virtualMachines = vmResult
-	m.vmsPoolSet = vmsPoolSet
+	// fetch VMs pools if enabled
+	if m.enableVMsAgentPool {
+		vmsPoolMap, err := m.fetchVMsPools()
+		if err != nil {
+			return err
+		}
+		m.vmsPoolMap = vmsPoolMap
+	}
 
 	return nil
 }
@@ -245,19 +272,17 @@ const (
 )
 
 // fetchVirtualMachines returns the updated list of virtual machines in the config resource group using the Azure API.
-func (m *azureCache) fetchVirtualMachines() (map[string][]compute.VirtualMachine, map[string]struct{}, error) {
+func (m *azureCache) fetchVirtualMachines() (map[string][]*armcompute.VirtualMachine, error) {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
 	result, err := m.azClient.virtualMachinesClient.List(ctx, m.resourceGroup)
 	if err != nil {
 		klog.Errorf("VirtualMachinesClient.List in resource group %q failed: %v", m.resourceGroup, err)
-		return nil, nil, err.Error()
+		return nil, err
 	}
 
-	instances := make(map[string][]compute.VirtualMachine)
-	// track the nodepools that're vms pools
-	vmsPoolSet := make(map[string]struct{})
+	instances := make(map[string][]*armcompute.VirtualMachine)
 	for _, instance := range result {
 		if instance.Tags == nil {
 			continue
@@ -269,39 +294,60 @@ func (m *azureCache) fetchVirtualMachines() (map[string][]compute.VirtualMachine
 		if vmPoolName == nil {
 			vmPoolName = tags[legacyAgentpoolNameTag]
 		}
-		if vmPoolName == nil {
-			continue
-		}
-
-		instances[to.String(vmPoolName)] = append(instances[to.String(vmPoolName)], instance)
-
-		// if the nodepool is already in the map, skip it
-		if _, ok := vmsPoolSet[to.String(vmPoolName)]; ok {
-			continue
-		}
-
-		// nodes from vms pool will have tag "aks-managed-agentpool-type" set to "VirtualMachines"
-		if agentpoolType := tags[agentpoolTypeTag]; agentpoolType != nil {
-			if strings.EqualFold(to.String(agentpoolType), vmsPoolType) {
-				vmsPoolSet[to.String(vmPoolName)] = struct{}{}
-			}
+		if vmPoolName != nil {
+			instances[*vmPoolName] = append(instances[*vmPoolName], instance)
 		}
 	}
-	return instances, vmsPoolSet, nil
+	return instances, nil
+}
+
+// fetchVMsPools returns a name to agentpool map of all the VMs pools in the cluster
+func (m *azureCache) fetchVMsPools() (map[string]armcontainerservice.AgentPool, error) {
+	ctx, cancel := getContextWithTimeout(vmsContextTimeout)
+	defer cancel()
+
+	// defensive check, should never happen when enableVMsAgentPool toggle is on
+	if m.azClient.agentPoolClient == nil {
+		return nil, errors.New("agentPoolClient is nil")
+	}
+
+	vmsPoolMap := make(map[string]armcontainerservice.AgentPool)
+	pager := m.azClient.agentPoolClient.NewListPager(m.clusterResourceGroup, m.clusterName, nil)
+	var aps []*armcontainerservice.AgentPool
+	for pager.More() {
+		resp, err := pager.NextPage(ctx)
+		if err != nil {
+			klog.Errorf("agentPoolClient.pager.NextPage in cluster %s resource group %s failed: %v",
+				m.clusterName, m.clusterResourceGroup, err)
+			return nil, err
+		}
+		aps = append(aps, resp.Value...)
+	}
+
+	for _, ap := range aps {
+		if ap != nil && ap.Name != nil && ap.Properties != nil && ap.Properties.Type != nil &&
+			*ap.Properties.Type == armcontainerservice.AgentPoolTypeVirtualMachines {
+			// we only care about VMs pools, skip other types
+			klog.V(6).Infof("Found VMs pool %q", *ap.Name)
+			vmsPoolMap[*ap.Name] = *ap
+		}
+	}
+
+	return vmsPoolMap, nil
 }
 
 // fetchScaleSets returns the updated list of scale sets in the config resource group using the Azure API.
-func (m *azureCache) fetchScaleSets() (map[string]compute.VirtualMachineScaleSet, error) {
+func (m *azureCache) fetchScaleSets() (map[string]*armcompute.VirtualMachineScaleSet, error) {
 	ctx, cancel := getContextWithTimeout(vmssContextTimeout)
 	defer cancel()
 
 	result, err := m.azClient.virtualMachineScaleSetsClient.List(ctx, m.resourceGroup)
 	if err != nil {
 		klog.Errorf("VirtualMachineScaleSetsClient.List in resource group %q failed: %v", m.resourceGroup, err)
-		return nil, err.Error()
+		return nil, err
 	}
 
-	sets := make(map[string]compute.VirtualMachineScaleSet)
+	sets := make(map[string]*armcompute.VirtualMachineScaleSet)
 	for _, vmss := range result {
 		sets[*vmss.Name] = vmss
 	}
@@ -358,27 +404,26 @@ func (m *azureCache) Unregister(nodeGroup cloudprovider.NodeGroup) bool {
 }
 
 func (m *azureCache) fetchSKUs(ctx context.Context, location string) (*skewer.Cache, error) {
+	if location == "" {
+		return nil, errors.New("location not specified")
+	}
+
 	return skewer.NewCache(ctx,
 		skewer.WithLocation(location),
 		skewer.WithResourceClient(m.azClient.skuClient),
 	)
 }
 
+// HasVMSKUS returns true if the cache has any VM SKUs. Can be used to judge success of loading.
+func (m *azureCache) HasVMSKUs() bool {
+	// not nil or empty (using the only exposed semi-efficient way to check)
+	return !(m.skus == nil || m.skus.Equal(&skewer.Cache{}))
+}
+
 func (m *azureCache) GetSKU(ctx context.Context, skuName, location string) (skewer.SKU, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-
-	cache, ok := m.skus[location]
-	if !ok {
-		var err error
-		cache, err = m.fetchSKUs(ctx, location)
-		if err != nil {
-			klog.V(1).Infof("Failed to instantiate cache, err: %v", err)
-			return skewer.SKU{}, err
-		}
-		m.skus[location] = cache
-	}
-
+	cache := m.skus
 	return cache.Get(ctx, skuName, skewer.VirtualMachines, location)
 }
 
@@ -417,7 +462,7 @@ func (m *azureCache) HasInstance(providerID string) (bool, error) {
 
 // FindForInstance returns node group of the given Instance
 func (m *azureCache) FindForInstance(instance *azureRef, vmType string) (cloudprovider.NodeGroup, error) {
-	vmsPoolSet := m.getVMsPoolSet()
+	vmsPoolMap := m.getVMsPoolMap()
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -436,7 +481,7 @@ func (m *azureCache) FindForInstance(instance *azureRef, vmType string) (cloudpr
 	}
 
 	// cluster with vmss pool only
-	if vmType == vmTypeVMSS && len(vmsPoolSet) == 0 {
+	if vmType == providerazureconsts.VMTypeVMSS && len(vmsPoolMap) == 0 {
 		if m.areAllScaleSetsUniform() {
 			// Omit virtual machines not managed by vmss only in case of uniform scale set.
 			if ok := virtualMachineRE.Match([]byte(inst.Name)); ok {
@@ -447,7 +492,7 @@ func (m *azureCache) FindForInstance(instance *azureRef, vmType string) (cloudpr
 		}
 	}
 
-	if vmType == vmTypeStandard {
+	if vmType == providerazureconsts.VMTypeStandard {
 		// Omit virtual machines with providerID not in Azure resource ID format.
 		if ok := virtualMachineRE.Match([]byte(inst.Name)); !ok {
 			klog.V(3).Infof("Instance %q is not in Azure resource ID format, omit it in autoscaler", instance.Name)
@@ -469,7 +514,8 @@ func (m *azureCache) FindForInstance(instance *azureRef, vmType string) (cloudpr
 // isAllScaleSetsAreUniform determines if all the scale set autoscaler is monitoring are Uniform or not.
 func (m *azureCache) areAllScaleSetsUniform() bool {
 	for _, scaleSet := range m.scaleSets {
-		if scaleSet.VirtualMachineScaleSetProperties.OrchestrationMode == compute.Flexible {
+		if scaleSet.Properties != nil && scaleSet.Properties.OrchestrationMode != nil &&
+			*scaleSet.Properties.OrchestrationMode == armcompute.OrchestrationModeFlexible {
 			return false
 		}
 	}

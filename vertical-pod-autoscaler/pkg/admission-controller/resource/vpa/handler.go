@@ -17,29 +17,25 @@ limitations under the License.
 package vpa
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	v1 "k8s.io/api/admission/v1"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apires "k8s.io/apimachinery/pkg/api/resource"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
+
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/features"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
-	"k8s.io/klog/v2"
 )
 
 var (
-	possibleUpdateModes = map[vpa_types.UpdateMode]interface{}{
-		vpa_types.UpdateModeOff:      struct{}{},
-		vpa_types.UpdateModeInitial:  struct{}{},
-		vpa_types.UpdateModeRecreate: struct{}{},
-		vpa_types.UpdateModeAuto:     struct{}{},
-	}
-
-	possibleScalingModes = map[vpa_types.ContainerScalingMode]interface{}{
+	possibleScalingModes = map[vpa_types.ContainerScalingMode]any{
 		vpa_types.ContainerScalingModeAuto: struct{}{},
 		vpa_types.ContainerScalingModeOff:  struct{}{},
 	}
@@ -71,8 +67,8 @@ func (h *resourceHandler) DisallowIncorrectObjects() bool {
 }
 
 // GetPatches builds patches for VPA in given admission request.
-func (h *resourceHandler) GetPatches(ar *v1.AdmissionRequest) ([]resource.PatchRecord, error) {
-	raw, isCreate := ar.Object.Raw, ar.Operation == v1.Create
+func (h *resourceHandler) GetPatches(_ context.Context, ar *admissionv1.AdmissionRequest) ([]resource.PatchRecord, error) {
+	raw, isCreate := ar.Object.Raw, ar.Operation == admissionv1.Create
 	vpa, err := parseVPA(raw)
 	if err != nil {
 		return nil, err
@@ -88,11 +84,12 @@ func (h *resourceHandler) GetPatches(ar *v1.AdmissionRequest) ([]resource.PatchR
 		return nil, err
 	}
 
-	klog.V(4).Infof("Processing vpa: %v", vpa)
+	klog.V(4).InfoS("Processing vpa", "vpa", vpa)
 	patches := []resource.PatchRecord{}
 	if vpa.Spec.UpdatePolicy == nil {
 		// Sets the default updatePolicy.
-		defaultUpdateMode := vpa_types.UpdateModeAuto
+		// Changed from UpdateModeAuto to UpdateModeRecreate as part of Auto mode deprecation
+		defaultUpdateMode := vpa_types.UpdateModeRecreate
 		patches = append(patches, resource.PatchRecord{
 			Op:    "add",
 			Path:  "/spec/updatePolicy",
@@ -111,63 +108,134 @@ func parseVPA(raw []byte) (*vpa_types.VerticalPodAutoscaler, error) {
 
 // ValidateVPA checks the correctness of VPA Spec and returns an error if there is a problem.
 func ValidateVPA(vpa *vpa_types.VerticalPodAutoscaler, isCreate bool) error {
+	// check that perVPA is on if being used
+	if err := validatePerVPAFeatureFlag(vpa); err != nil {
+		return err
+	}
+
 	if vpa.Spec.UpdatePolicy != nil {
 		mode := vpa.Spec.UpdatePolicy.UpdateMode
 		if mode == nil {
-			return fmt.Errorf("UpdateMode is required if UpdatePolicy is used")
+			return errors.New("updateMode is required if UpdatePolicy is used")
 		}
-		if _, found := possibleUpdateModes[*mode]; !found {
+		if _, found := vpa_types.GetUpdateModes()[*mode]; !found {
 			return fmt.Errorf("unexpected UpdateMode value %s", *mode)
 		}
-
+		if (*mode == vpa_types.UpdateModeInPlaceOrRecreate) && !features.Enabled(features.InPlaceOrRecreate) && isCreate {
+			return fmt.Errorf("in order to use UpdateMode %s, you must enable feature gate %s in the admission-controller args", vpa_types.UpdateModeInPlaceOrRecreate, features.InPlaceOrRecreate)
+		}
 		if minReplicas := vpa.Spec.UpdatePolicy.MinReplicas; minReplicas != nil && *minReplicas <= 0 {
-			return fmt.Errorf("MinReplicas has to be positive, got %v", *minReplicas)
+			return fmt.Errorf("minReplicas has to be positive, got %v", *minReplicas)
 		}
 	}
 
 	if vpa.Spec.ResourcePolicy != nil {
 		for _, policy := range vpa.Spec.ResourcePolicy.ContainerPolicies {
 			if policy.ContainerName == "" {
-				return fmt.Errorf("ContainerPolicies.ContainerName is required")
+				return errors.New("containerPolicies.ContainerName is required")
 			}
+
+			// Validate OOMBumpUpRatio
+			if policy.OOMBumpUpRatio != nil {
+				ratio := float64(policy.OOMBumpUpRatio.MilliValue()) / 1000.0
+				if ratio < 1.0 {
+					return fmt.Errorf("oomBumpUpRatio must be greater than or equal to 1.0, got %v", ratio)
+				}
+			}
+
+			// Validate OOMMinBumpUp
+			if policy.OOMMinBumpUp != nil {
+				minBump := policy.OOMMinBumpUp.Value()
+				if minBump < 0 {
+					return fmt.Errorf("oomMinBumpUp must be greater than or equal to 0, got %v bytes", minBump)
+				}
+			}
+
 			mode := policy.Mode
 			if mode != nil {
 				if _, found := possibleScalingModes[*mode]; !found {
 					return fmt.Errorf("unexpected Mode value %s", *mode)
 				}
 			}
-			for resource, min := range policy.MinAllowed {
-				if err := validateResourceResolution(resource, min); err != nil {
-					return fmt.Errorf("MinAllowed: %v", err)
+			for resource, minAllowed := range policy.MinAllowed {
+				if err := validateResourceResolution(resource, minAllowed); err != nil {
+					return fmt.Errorf("minAllowed: %v", err)
 				}
-				max, found := policy.MaxAllowed[resource]
-				if found && max.Cmp(min) < 0 {
+				maxAllowed, found := policy.MaxAllowed[resource]
+				if found && maxAllowed.Cmp(minAllowed) < 0 {
 					return fmt.Errorf("max resource for %v is lower than min", resource)
 				}
 			}
-
 			for resource, max := range policy.MaxAllowed {
 				if err := validateResourceResolution(resource, max); err != nil {
-					return fmt.Errorf("MaxAllowed: %v", err)
+					return fmt.Errorf("maxAllowed: %v", err)
 				}
 			}
-			ControlledValues := policy.ControlledValues
-			if mode != nil && ControlledValues != nil {
-				if *mode == vpa_types.ContainerScalingModeOff && *ControlledValues == vpa_types.ContainerControlledValuesRequestsAndLimits {
-					return fmt.Errorf("ControlledValues shouldn't be specified if container scaling mode is off.")
+			controlledValues := policy.ControlledValues
+			if mode != nil && controlledValues != nil {
+				if *mode == vpa_types.ContainerScalingModeOff && *controlledValues == vpa_types.ContainerControlledValuesRequestsAndLimits {
+					return errors.New("controlledValues shouldn't be specified if container scaling mode is off")
 				}
+			}
+			if err := validateStartupBoost(policy.StartupBoost, isCreate); err != nil {
+				return fmt.Errorf("invalid startupBoost in container %s: %v", policy.ContainerName, err)
 			}
 		}
 	}
 
+	if err := validateStartupBoost(vpa.Spec.StartupBoost, isCreate); err != nil {
+		return fmt.Errorf("invalid startupBoost: %v", err)
+	}
+
 	if isCreate && vpa.Spec.TargetRef == nil {
-		return fmt.Errorf("TargetRef is required. If you're using v1beta1 version of the API, please migrate to v1")
+		return errors.New("targetRef is required. If you're using v1beta1 version of the API, please migrate to v1")
 	}
 
 	if len(vpa.Spec.Recommenders) > 1 {
-		return fmt.Errorf("The current version of VPA object shouldn't specify more than one recommenders.")
+		return errors.New("the current version of VPA object shouldn't specify more than one recommenders")
 	}
 
+	return nil
+}
+
+func validateStartupBoost(startupBoost *vpa_types.StartupBoost, isCreate bool) error {
+	if startupBoost == nil {
+		return nil
+	}
+
+	if !features.Enabled(features.CPUStartupBoost) && isCreate {
+		return fmt.Errorf("in order to use startupBoost, you must enable feature gate %s in the admission-controller args", features.CPUStartupBoost)
+	}
+
+	cpuBoost := startupBoost.CPU
+	if cpuBoost == nil {
+		return nil
+	}
+	boostType := cpuBoost.Type
+	if boostType == "" {
+		return fmt.Errorf("startupBoost.cpu.type field is required and must be either %s or %s",
+			vpa_types.FactorStartupBoostType, vpa_types.QuantityStartupBoostType)
+	}
+
+	switch boostType {
+	case vpa_types.FactorStartupBoostType:
+		if cpuBoost.Factor == nil {
+			return errors.New("startupBoost.cpu.factor is required when type is Factor")
+		}
+		if *cpuBoost.Factor < 1 {
+			return errors.New("invalid startupBoost.cpu.factor: must be >= 1 for type Factor")
+		}
+	case vpa_types.QuantityStartupBoostType:
+		if cpuBoost.Quantity == nil {
+			return errors.New("startupBoost.cpu.quantity is required when type is Quantity")
+		}
+		if err := validateCPUResolution(*cpuBoost.Quantity); err != nil {
+			return fmt.Errorf("invalid startupBoost.cpu.quantity: %v", err)
+		}
+	default:
+		return fmt.Errorf("startupBoost.cpu.type field is required and must be either %s or %s, got %v",
+			vpa_types.FactorStartupBoostType, vpa_types.QuantityStartupBoostType, boostType)
+	}
 	return nil
 }
 
@@ -190,7 +258,24 @@ func validateCPUResolution(val apires.Quantity) error {
 
 func validateMemoryResolution(val apires.Quantity) error {
 	if _, precissionPreserved := val.AsScale(0); !precissionPreserved {
-		return fmt.Errorf("Memory [%v] must be a whole number of bytes", val)
+		return fmt.Errorf("memory [%v] must be a whole number of bytes", val)
+	}
+	return nil
+}
+
+func validatePerVPAFeatureFlag(vpa *vpa_types.VerticalPodAutoscaler) error {
+	featureFlagOn := features.Enabled(features.PerVPAConfig)
+	if !featureFlagOn && vpa.Spec.UpdatePolicy.EvictAfterOOMSeconds != nil {
+		return fmt.Errorf("EvictAfterOOMSeconds is not supported when feature flag %s is disabled", features.PerVPAConfig)
+	}
+
+	if vpa.Spec.ResourcePolicy != nil {
+		for _, policy := range vpa.Spec.ResourcePolicy.ContainerPolicies {
+			perVPA := policy.OOMBumpUpRatio != nil || policy.OOMMinBumpUp != nil
+			if !featureFlagOn && perVPA {
+				return fmt.Errorf("OOMBumpUpRatio and OOMMinBumpUp are not supported when feature flag %s is disabled", features.PerVPAConfig)
+			}
+		}
 	}
 	return nil
 }

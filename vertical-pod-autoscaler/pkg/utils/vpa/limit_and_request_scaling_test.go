@@ -20,10 +20,9 @@ import (
 	"math"
 	"testing"
 
-	core "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func mustParseToPointer(str string) *resource.Quantity {
@@ -60,6 +59,7 @@ func TestGetProportionalResourceLimitCPU(t *testing.T) {
 			originalRequest:    mustParseToPointer("1"),
 			recommendedRequest: mustParseToPointer("10"),
 			expectLimit:        nil,
+			expectAnnotation:   true,
 		},
 		{
 			name:               "no original request",
@@ -73,6 +73,7 @@ func TestGetProportionalResourceLimitCPU(t *testing.T) {
 			recommendedRequest: mustParseToPointer("0"),
 			defaultLimit:       mustParseToPointer("2"),
 			expectLimit:        nil,
+			expectAnnotation:   true,
 		},
 		{
 			name:               "limit equal to request",
@@ -86,7 +87,7 @@ func TestGetProportionalResourceLimitCPU(t *testing.T) {
 			originalLimit:      mustParseToPointer("2"),
 			originalRequest:    mustParseToPointer("1.50"),
 			recommendedRequest: mustParseToPointer("1"),
-			expectLimit:        mustParseToPointer("1.333"),
+			expectLimit:        mustParseToPointer("1.333"), // (2000*1000)/1500 = 1333,3m -> 1.333
 		},
 		{
 			name:               "go over milli cap",
@@ -99,7 +100,7 @@ func TestGetProportionalResourceLimitCPU(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotLimit, gotAnnotation := getProportionalResourceLimit(core.ResourceCPU, tc.originalLimit, tc.originalRequest, tc.recommendedRequest, tc.defaultLimit)
+			gotLimit, gotAnnotation := getProportionalResourceLimit(corev1.ResourceCPU, tc.originalLimit, tc.originalRequest, tc.recommendedRequest, tc.defaultLimit)
 			if tc.expectLimit == nil {
 				assert.Nil(t, gotLimit)
 			} else {
@@ -141,6 +142,7 @@ func TestGetProportionalResourceLimitMem(t *testing.T) {
 			originalRequest:    mustParseToPointer("1"),
 			recommendedRequest: mustParseToPointer("10"),
 			expectLimit:        nil,
+			expectAnnotation:   true,
 		},
 		{
 			name:               "no original request",
@@ -154,6 +156,7 @@ func TestGetProportionalResourceLimitMem(t *testing.T) {
 			recommendedRequest: mustParseToPointer("0"),
 			defaultLimit:       mustParseToPointer("2"),
 			expectLimit:        nil,
+			expectAnnotation:   true,
 		},
 		{
 			name:               "limit equal to request",
@@ -180,7 +183,7 @@ func TestGetProportionalResourceLimitMem(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotLimit, gotAnnotation := getProportionalResourceLimit(core.ResourceMemory, tc.originalLimit, tc.originalRequest, tc.recommendedRequest, tc.defaultLimit)
+			gotLimit, gotAnnotation := getProportionalResourceLimit(corev1.ResourceMemory, tc.originalLimit, tc.originalRequest, tc.recommendedRequest, tc.defaultLimit)
 			if tc.expectLimit == nil {
 				assert.Nil(t, gotLimit)
 			} else {
@@ -189,6 +192,34 @@ func TestGetProportionalResourceLimitMem(t *testing.T) {
 				}
 			}
 			assert.Equal(t, gotAnnotation != "", tc.expectAnnotation)
+		})
+	}
+}
+
+func TestScaleQuantityProportionallyCPU(t *testing.T) {
+	tests := []struct {
+		name             string
+		scaledQuantity   *resource.Quantity
+		scaleBase        *resource.Quantity
+		scaleResult      *resource.Quantity
+		rounding         roundingMode
+		expectResultType scalingResultType
+		expectResult     *resource.Quantity
+	}{
+		{
+			name:             "scaleBase is zero should return scaledQuantity",
+			scaledQuantity:   mustParseToPointer("1"),
+			scaleBase:        mustParseToPointer("0"),
+			scaleResult:      mustParseToPointer("20"),
+			expectResultType: divisionByZero,
+			expectResult:     mustParseToPointer("1"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, resultType := scaleQuantityProportionallyCPU(tc.scaledQuantity, tc.scaleBase, tc.scaleResult, roundUpToFullUnit)
+			assert.Equal(t, resultType, tc.expectResultType)
+			assert.Equal(t, result, tc.expectResult)
 		})
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2016, 2018, 2023, Oracle and/or its affiliates.  All rights reserved.
+// Copyright (c) 2016, 2018, 2025, Oracle and/or its affiliates.  All rights reserved.
 // This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
 // Code generated. DO NOT EDIT.
 
@@ -6,11 +6,11 @@
 //
 // Use the Core Services API to manage resources such as virtual cloud networks (VCNs),
 // compute instances, and block storage volumes. For more information, see the console
-// documentation for the Networking (https://docs.cloud.oracle.com/iaas/Content/Network/Concepts/overview.htm),
-// Compute (https://docs.cloud.oracle.com/iaas/Content/Compute/Concepts/computeoverview.htm), and
-// Block Volume (https://docs.cloud.oracle.com/iaas/Content/Block/Concepts/overview.htm) services.
+// documentation for the Networking (https://docs.oracle.com/iaas/Content/Network/Concepts/overview.htm),
+// Compute (https://docs.oracle.com/iaas/Content/Compute/Concepts/computeoverview.htm), and
+// Block Volume (https://docs.oracle.com/iaas/Content/Block/Concepts/overview.htm) services.
 // The required permissions are documented in the
-// Details for the Core Services (https://docs.cloud.oracle.com/iaas/Content/Identity/Reference/corepolicyreference.htm) article.
+// Details for the Core Services (https://docs.oracle.com/iaas/Content/Identity/Reference/corepolicyreference.htm) article.
 //
 
 package core
@@ -35,22 +35,22 @@ import (
 // Oracle uses the IPSec connection's static routes when routing a tunnel's traffic *only*
 // if that tunnel's `routing` attribute = `STATIC`. Otherwise the static routes are ignored.
 // For more information about the workflow for setting up an IPSec connection, see
-// Site-to-Site VPN Overview (https://docs.cloud.oracle.com/iaas/Content/Network/Tasks/overviewIPsec.htm).
+// Site-to-Site VPN Overview (https://docs.oracle.com/iaas/Content/Network/Tasks/overviewIPsec.htm).
 // To use any of the API operations, you must be authorized in an IAM policy. If you're not authorized,
 // talk to an administrator. If you're an administrator who needs to write policies to give users access, see
-// Getting Started with Policies (https://docs.cloud.oracle.com/iaas/Content/Identity/Concepts/policygetstarted.htm).
+// Getting Started with Policies (https://docs.oracle.com/iaas/Content/Identity/Concepts/policygetstarted.htm).
 type IpSecConnection struct {
 
-	// The OCID (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the compartment containing the IPSec connection.
+	// The OCID (https://docs.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the compartment containing the IPSec connection.
 	CompartmentId *string `mandatory:"true" json:"compartmentId"`
 
-	// The OCID (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the Cpe object.
+	// The OCID (https://docs.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the Cpe object.
 	CpeId *string `mandatory:"true" json:"cpeId"`
 
-	// The OCID (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the DRG.
+	// The OCID (https://docs.oracle.com/iaas/Content/General/Concepts/identifiers.htm) of the DRG.
 	DrgId *string `mandatory:"true" json:"drgId"`
 
-	// The IPSec connection's Oracle ID (OCID (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/identifiers.htm)).
+	// The IPSec connection's Oracle ID (OCID (https://docs.oracle.com/iaas/Content/General/Concepts/identifiers.htm)).
 	Id *string `mandatory:"true" json:"id"`
 
 	// The IPSec connection's current state.
@@ -63,13 +63,13 @@ type IpSecConnection struct {
 	// you must provide at least one valid static route. If you configure both
 	// tunnels to use BGP dynamic routing, you can provide an empty list for the static routes.
 	// The CIDR can be either IPv4 or IPv6. IPv6 addressing is supported for all commercial and government regions.
-	// See IPv6 Addresses (https://docs.cloud.oracle.com/iaas/Content/Network/Concepts/ipv6.htm).
+	// See IPv6 Addresses (https://docs.oracle.com/iaas/Content/Network/Concepts/ipv6.htm).
 	// Example: `10.0.1.0/24`
 	// Example: `2001:db8::/32`
 	StaticRoutes []string `mandatory:"true" json:"staticRoutes"`
 
 	// Defined tags for this resource. Each key is predefined and scoped to a
-	// namespace. For more information, see Resource Tags (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
+	// namespace. For more information, see Resource Tags (https://docs.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
 	// Example: `{"Operations": {"CostCenter": "42"}}`
 	DefinedTags map[string]map[string]interface{} `mandatory:"false" json:"definedTags"`
 
@@ -78,7 +78,7 @@ type IpSecConnection struct {
 	DisplayName *string `mandatory:"false" json:"displayName"`
 
 	// Free-form tags for this resource. Each tag is a simple key-value pair with no
-	// predefined name, type, or namespace. For more information, see Resource Tags (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
+	// predefined name, type, or namespace. For more information, see Resource Tags (https://docs.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
 	// Example: `{"Department": "Finance"}`
 	FreeformTags map[string]string `mandatory:"false" json:"freeformTags"`
 
@@ -88,7 +88,7 @@ type IpSecConnection struct {
 	// If you don't provide a value when creating the IPSec connection, the `ipAddress` attribute
 	// for the Cpe object specified by `cpeId` is used as the `cpeLocalIdentifier`.
 	// For information about why you'd provide this value, see
-	// If Your CPE Is Behind a NAT Device (https://docs.cloud.oracle.com/iaas/Content/Network/Tasks/overviewIPsec.htm#nat).
+	// If Your CPE Is Behind a NAT Device (https://docs.oracle.com/iaas/Content/Network/Tasks/overviewIPsec.htm#nat).
 	// Example IP address: `10.0.3.3`
 	// Example hostname: `cpe.example.com`
 	CpeLocalIdentifier *string `mandatory:"false" json:"cpeLocalIdentifier"`
@@ -100,6 +100,9 @@ type IpSecConnection struct {
 	// The date and time the IPSec connection was created, in the format defined by RFC3339 (https://tools.ietf.org/html/rfc3339).
 	// Example: `2016-08-25T21:10:29.600Z`
 	TimeCreated *common.SDKTime `mandatory:"false" json:"timeCreated"`
+
+	// The transport type used for the IPSec connection.
+	TransportType IpSecConnectionTransportTypeEnum `mandatory:"false" json:"transportType,omitempty"`
 }
 
 func (m IpSecConnection) String() string {
@@ -117,6 +120,9 @@ func (m IpSecConnection) ValidateEnumValue() (bool, error) {
 
 	if _, ok := GetMappingIpSecConnectionCpeLocalIdentifierTypeEnum(string(m.CpeLocalIdentifierType)); !ok && m.CpeLocalIdentifierType != "" {
 		errMessage = append(errMessage, fmt.Sprintf("unsupported enum value for CpeLocalIdentifierType: %s. Supported values are: %s.", m.CpeLocalIdentifierType, strings.Join(GetIpSecConnectionCpeLocalIdentifierTypeEnumStringValues(), ",")))
+	}
+	if _, ok := GetMappingIpSecConnectionTransportTypeEnum(string(m.TransportType)); !ok && m.TransportType != "" {
+		errMessage = append(errMessage, fmt.Sprintf("unsupported enum value for TransportType: %s. Supported values are: %s.", m.TransportType, strings.Join(GetIpSecConnectionTransportTypeEnumStringValues(), ",")))
 	}
 	if len(errMessage) > 0 {
 		return true, fmt.Errorf(strings.Join(errMessage, "\n"))
@@ -213,5 +219,47 @@ func GetIpSecConnectionCpeLocalIdentifierTypeEnumStringValues() []string {
 // GetMappingIpSecConnectionCpeLocalIdentifierTypeEnum performs case Insensitive comparison on enum value and return the desired enum
 func GetMappingIpSecConnectionCpeLocalIdentifierTypeEnum(val string) (IpSecConnectionCpeLocalIdentifierTypeEnum, bool) {
 	enum, ok := mappingIpSecConnectionCpeLocalIdentifierTypeEnumLowerCase[strings.ToLower(val)]
+	return enum, ok
+}
+
+// IpSecConnectionTransportTypeEnum Enum with underlying type: string
+type IpSecConnectionTransportTypeEnum string
+
+// Set of constants representing the allowable values for IpSecConnectionTransportTypeEnum
+const (
+	IpSecConnectionTransportTypeInternet    IpSecConnectionTransportTypeEnum = "INTERNET"
+	IpSecConnectionTransportTypeFastconnect IpSecConnectionTransportTypeEnum = "FASTCONNECT"
+)
+
+var mappingIpSecConnectionTransportTypeEnum = map[string]IpSecConnectionTransportTypeEnum{
+	"INTERNET":    IpSecConnectionTransportTypeInternet,
+	"FASTCONNECT": IpSecConnectionTransportTypeFastconnect,
+}
+
+var mappingIpSecConnectionTransportTypeEnumLowerCase = map[string]IpSecConnectionTransportTypeEnum{
+	"internet":    IpSecConnectionTransportTypeInternet,
+	"fastconnect": IpSecConnectionTransportTypeFastconnect,
+}
+
+// GetIpSecConnectionTransportTypeEnumValues Enumerates the set of values for IpSecConnectionTransportTypeEnum
+func GetIpSecConnectionTransportTypeEnumValues() []IpSecConnectionTransportTypeEnum {
+	values := make([]IpSecConnectionTransportTypeEnum, 0)
+	for _, v := range mappingIpSecConnectionTransportTypeEnum {
+		values = append(values, v)
+	}
+	return values
+}
+
+// GetIpSecConnectionTransportTypeEnumStringValues Enumerates the set of values in String for IpSecConnectionTransportTypeEnum
+func GetIpSecConnectionTransportTypeEnumStringValues() []string {
+	return []string{
+		"INTERNET",
+		"FASTCONNECT",
+	}
+}
+
+// GetMappingIpSecConnectionTransportTypeEnum performs case Insensitive comparison on enum value and return the desired enum
+func GetMappingIpSecConnectionTransportTypeEnum(val string) (IpSecConnectionTransportTypeEnum, bool) {
+	enum, ok := mappingIpSecConnectionTransportTypeEnumLowerCase[strings.ToLower(val)]
 	return enum, ok
 }

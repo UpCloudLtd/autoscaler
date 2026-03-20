@@ -18,8 +18,8 @@ limitations under the License.
 package v1beta2
 
 import (
-	autoscaling "k8s.io/api/autoscaling/v1"
-	v1 "k8s.io/api/core/v1"
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -41,6 +41,7 @@ type VerticalPodAutoscalerList struct {
 // +kubebuilder:resource:shortName=vpa
 // +kubebuilder:subresource:status
 // +k8s:prerelease-lifecycle-gen=true
+// +kubebuilder:metadata:annotations="api-approved.kubernetes.io=https://github.com/kubernetes/kubernetes/pull/63797"
 
 // VerticalPodAutoscaler is the configuration for a vertical pod
 // autoscaler, which automatically manages pod resources based on historical and
@@ -49,6 +50,7 @@ type VerticalPodAutoscalerList struct {
 // +k8s:prerelease-lifecycle-gen:deprecated=0.13.0
 // +k8s:prerelease-lifecycle-gen:replacement=autoscaling,v1,VerticalPodAutoscaler
 // +kubebuilder:deprecatedversion:warning=autoscaling.k8s.io/v1beta2 API is deprecated
+// +kubebuilder:unservedversion
 type VerticalPodAutoscaler struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
@@ -76,7 +78,7 @@ type VerticalPodAutoscalerSpec struct {
 	// of scale subresource - it will not use it to modify the replica count.
 	// The only thing retrieved is a label selector matching pods grouped by
 	// the target resource.
-	TargetRef *autoscaling.CrossVersionObjectReference `json:"targetRef" protobuf:"bytes,1,name=targetRef"`
+	TargetRef *autoscalingv1.CrossVersionObjectReference `json:"targetRef" protobuf:"bytes,1,name=targetRef"`
 
 	// Describes the rules on how changes are applied to the pods.
 	// If not specified, all fields in the `PodUpdatePolicy` are set to their
@@ -148,11 +150,11 @@ type ContainerResourcePolicy struct {
 	// Specifies the minimal amount of resources that will be recommended
 	// for the container. The default is no minimum.
 	// +optional
-	MinAllowed v1.ResourceList `json:"minAllowed,omitempty" protobuf:"bytes,3,rep,name=minAllowed,casttype=ResourceList,castkey=ResourceName"`
+	MinAllowed corev1.ResourceList `json:"minAllowed,omitempty" protobuf:"bytes,3,rep,name=minAllowed,casttype=ResourceList,castkey=ResourceName"`
 	// Specifies the maximum amount of resources that will be recommended
 	// for the container. The default is no maximum.
 	// +optional
-	MaxAllowed v1.ResourceList `json:"maxAllowed,omitempty" protobuf:"bytes,4,rep,name=maxAllowed,casttype=ResourceList,castkey=ResourceName"`
+	MaxAllowed corev1.ResourceList `json:"maxAllowed,omitempty" protobuf:"bytes,4,rep,name=maxAllowed,casttype=ResourceList,castkey=ResourceName"`
 }
 
 const (
@@ -205,17 +207,17 @@ type RecommendedContainerResources struct {
 	// Name of the container.
 	ContainerName string `json:"containerName,omitempty" protobuf:"bytes,1,opt,name=containerName"`
 	// Recommended amount of resources. Observes ContainerResourcePolicy.
-	Target v1.ResourceList `json:"target" protobuf:"bytes,2,rep,name=target,casttype=ResourceList,castkey=ResourceName"`
+	Target corev1.ResourceList `json:"target" protobuf:"bytes,2,rep,name=target,casttype=ResourceList,castkey=ResourceName"`
 	// Minimum recommended amount of resources. Observes ContainerResourcePolicy.
 	// This amount is not guaranteed to be sufficient for the application to operate in a stable way, however
 	// running with less resources is likely to have significant impact on performance/availability.
 	// +optional
-	LowerBound v1.ResourceList `json:"lowerBound,omitempty" protobuf:"bytes,3,rep,name=lowerBound,casttype=ResourceList,castkey=ResourceName"`
+	LowerBound corev1.ResourceList `json:"lowerBound,omitempty" protobuf:"bytes,3,rep,name=lowerBound,casttype=ResourceList,castkey=ResourceName"`
 	// Maximum recommended amount of resources. Observes ContainerResourcePolicy.
 	// Any resources allocated beyond this value are likely wasted. This value may be larger than the maximum
 	// amount of application is actually capable of consuming.
 	// +optional
-	UpperBound v1.ResourceList `json:"upperBound,omitempty" protobuf:"bytes,4,rep,name=upperBound,casttype=ResourceList,castkey=ResourceName"`
+	UpperBound corev1.ResourceList `json:"upperBound,omitempty" protobuf:"bytes,4,rep,name=upperBound,casttype=ResourceList,castkey=ResourceName"`
 	// The most recent recommended resources target computed by the autoscaler
 	// for the controlled pods, based only on actual resource usage, not taking
 	// into account the ContainerResourcePolicy.
@@ -224,7 +226,7 @@ type RecommendedContainerResources struct {
 	// or higher that MaxAllowed).
 	// Used only as status indication, will not affect actual resource assignment.
 	// +optional
-	UncappedTarget v1.ResourceList `json:"uncappedTarget,omitempty" protobuf:"bytes,5,opt,name=uncappedTarget"`
+	UncappedTarget corev1.ResourceList `json:"uncappedTarget,omitempty" protobuf:"bytes,5,opt,name=uncappedTarget"`
 }
 
 // VerticalPodAutoscalerConditionType are the valid conditions of
@@ -255,7 +257,7 @@ type VerticalPodAutoscalerCondition struct {
 	// type describes the current condition
 	Type VerticalPodAutoscalerConditionType `json:"type" protobuf:"bytes,1,name=type"`
 	// status is the status of the condition (True, False, Unknown)
-	Status v1.ConditionStatus `json:"status" protobuf:"bytes,2,name=status"`
+	Status corev1.ConditionStatus `json:"status" protobuf:"bytes,2,name=status"`
 	// lastTransitionTime is the last time the condition transitioned from
 	// one status to another
 	// +optional
@@ -273,6 +275,8 @@ type VerticalPodAutoscalerCondition struct {
 // +genclient:noStatus
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:resource:shortName=vpacheckpoint
+// +kubebuilder:metadata:annotations="api-approved.kubernetes.io=https://github.com/kubernetes/kubernetes/pull/63797"
+// +kubebuilder:unservedversion
 
 // VerticalPodAutoscalerCheckpoint is the checkpoint of the internal state of VPA that
 // is used for recovery after recommender's restart.
@@ -323,7 +327,7 @@ type VerticalPodAutoscalerCheckpointStatus struct {
 	// Checkpoint of histogram for consumption of memory.
 	MemoryHistogram HistogramCheckpoint `json:"memoryHistogram,omitempty" protobuf:"bytes,4,rep,name=memoryHistogram"`
 
-	// Timestamp of the fist sample from the histograms.
+	// Timestamp of the first sample from the histograms.
 	// +nullable
 	FirstSampleStart metav1.Time `json:"firstSampleStart,omitempty" protobuf:"bytes,5,opt,name=firstSampleStart"`
 

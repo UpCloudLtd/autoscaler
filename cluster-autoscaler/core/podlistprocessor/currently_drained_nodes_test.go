@@ -21,11 +21,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/status"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/testsnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 )
@@ -265,14 +267,14 @@ func TestCurrentlyDrainedNodesPodListProcessor(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.AutoscalingContext{
+			autoscalingCtx := ca_context.AutoscalingContext{
 				ScaleDownActuator: &mockActuator{&mockActuationStatus{tc.drainedNodes}},
-				ClusterSnapshot:   clustersnapshot.NewBasicClusterSnapshot(),
+				ClusterSnapshot:   testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			clustersnapshot.InitializeClusterSnapshotOrDie(t, ctx.ClusterSnapshot, tc.nodes, tc.pods)
+			clustersnapshot.InitializeClusterSnapshotOrDie(t, autoscalingCtx.ClusterSnapshot, tc.nodes, tc.pods)
 
 			processor := NewCurrentlyDrainedNodesPodListProcessor()
-			pods, err := processor.Process(&ctx, tc.unschedulablePods)
+			pods, err := processor.Process(&autoscalingCtx, tc.unschedulablePods)
 			assert.NoError(t, err)
 			assert.ElementsMatch(t, tc.wantPods, pods)
 		})
@@ -284,6 +286,10 @@ type mockActuator struct {
 }
 
 func (m *mockActuator) StartDeletion(_, _ []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
+	return status.ScaleDownError, []*status.ScaleDownNode{}, nil
+}
+
+func (m *mockActuator) StartForceDeletion(_, _ []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
 	return status.ScaleDownError, []*status.ScaleDownNode{}, nil
 }
 

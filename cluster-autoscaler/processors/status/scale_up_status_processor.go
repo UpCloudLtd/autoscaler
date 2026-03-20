@@ -18,10 +18,10 @@ package status
 
 import (
 	apiv1 "k8s.io/api/core/v1"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroups"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroupset"
 )
@@ -66,6 +66,8 @@ const (
 	ScaleUpNotTried
 	// ScaleUpInCooldown - the scale up wasn't even attempted, because it's in a cooldown state (it's suspended for a scheduled period of time).
 	ScaleUpInCooldown
+	// ScaleUpLimitedByMaxNodesTotal - the scale up wasn't attempted, because the cluster reached max nodes total
+	ScaleUpLimitedByMaxNodesTotal
 )
 
 // WasSuccessful returns true if the scale-up was successful.
@@ -80,7 +82,7 @@ type Reasons interface {
 
 // ScaleUpStatusProcessor processes the status of the cluster after a scale-up.
 type ScaleUpStatusProcessor interface {
-	Process(context *context.AutoscalingContext, status *ScaleUpStatus)
+	Process(autoscalingCtx *ca_context.AutoscalingContext, status *ScaleUpStatus)
 	CleanUp()
 }
 
@@ -93,11 +95,48 @@ func NewDefaultScaleUpStatusProcessor() ScaleUpStatusProcessor {
 type NoOpScaleUpStatusProcessor struct{}
 
 // Process processes the status of the cluster after a scale-up.
-func (p *NoOpScaleUpStatusProcessor) Process(context *context.AutoscalingContext, status *ScaleUpStatus) {
+func (p *NoOpScaleUpStatusProcessor) Process(autoscalingCtx *ca_context.AutoscalingContext, status *ScaleUpStatus) {
 }
 
 // CleanUp cleans up the processor's internal structures.
 func (p *NoOpScaleUpStatusProcessor) CleanUp() {
+}
+
+// CombinedScaleUpStatusProcessor is a list of ScaleUpStatusProcessor
+type CombinedScaleUpStatusProcessor struct {
+	processors []ScaleUpStatusProcessor
+}
+
+// NewCombinedScaleUpStatusProcessor construct CombinedScaleUpStatusProcessor.
+func NewCombinedScaleUpStatusProcessor(processors []ScaleUpStatusProcessor) *CombinedScaleUpStatusProcessor {
+	var scaleUpProcessors []ScaleUpStatusProcessor
+	for _, processor := range processors {
+		if processor != nil {
+			scaleUpProcessors = append(scaleUpProcessors, processor)
+		}
+	}
+	return &CombinedScaleUpStatusProcessor{scaleUpProcessors}
+}
+
+// AddProcessor append processor to the list.
+func (p *CombinedScaleUpStatusProcessor) AddProcessor(processor ScaleUpStatusProcessor) {
+	if processor != nil {
+		p.processors = append(p.processors, processor)
+	}
+}
+
+// Process runs sub-processors sequentially in the same order of addition
+func (p *CombinedScaleUpStatusProcessor) Process(autoscalingCtx *ca_context.AutoscalingContext, status *ScaleUpStatus) {
+	for _, processor := range p.processors {
+		processor.Process(autoscalingCtx, status)
+	}
+}
+
+// CleanUp cleans up the processor's internal structures.
+func (p *CombinedScaleUpStatusProcessor) CleanUp() {
+	for _, processor := range p.processors {
+		processor.CleanUp()
+	}
 }
 
 // UpdateScaleUpError updates ScaleUpStatus.

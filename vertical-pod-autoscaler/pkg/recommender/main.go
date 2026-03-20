@@ -18,20 +18,19 @@ package main
 
 import (
 	"context"
-	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
-	kube_flag "k8s.io/component-base/cli/flag"
 	componentbaseconfig "k8s.io/component-base/config"
 	componentbaseoptions "k8s.io/component-base/config/options"
 	"k8s.io/klog/v2"
@@ -40,6 +39,7 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/common"
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/checkpoint"
+	recommender_config "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/config"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/history"
 	input_metrics "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/metrics"
@@ -51,57 +51,9 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
+	metrics_resources "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/resources"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/server"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
-)
-
-var (
-	recommenderName        = flag.String("recommender-name", input.DefaultRecommenderName, "Set the recommender name. Recommender will generate recommendations for VPAs that configure the same recommender name. If the recommender name is left as default it will also generate recommendations that don't explicitly specify recommender. You shouldn't run two recommenders with the same name in a cluster.")
-	metricsFetcherInterval = flag.Duration("recommender-interval", 1*time.Minute, `How often metrics should be fetched`)
-	checkpointsGCInterval  = flag.Duration("checkpoints-gc-interval", 10*time.Minute, `How often orphaned checkpoints should be garbage collected`)
-	prometheusAddress      = flag.String("prometheus-address", "", `Where to reach for Prometheus metrics`)
-	prometheusJobName      = flag.String("prometheus-cadvisor-job-name", "kubernetes-cadvisor", `Name of the prometheus job name which scrapes the cAdvisor metrics`)
-	address                = flag.String("address", ":8942", "The address to expose Prometheus metrics.")
-	kubeconfig             = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
-	kubeApiQps             = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
-	kubeApiBurst           = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
-
-	storage = flag.String("storage", "", `Specifies storage mode. Supported values: prometheus, checkpoint (default)`)
-	// prometheus history provider configs
-	historyLength              = flag.String("history-length", "8d", `How much time back prometheus have to be queried to get historical metrics`)
-	historyResolution          = flag.String("history-resolution", "1h", `Resolution at which Prometheus is queried for historical metrics`)
-	queryTimeout               = flag.String("prometheus-query-timeout", "5m", `How long to wait before killing long queries`)
-	podLabelPrefix             = flag.String("pod-label-prefix", "pod_label_", `Which prefix to look for pod labels in metrics`)
-	podLabelsMetricName        = flag.String("metric-for-pod-labels", "up{job=\"kubernetes-pods\"}", `Which metric to look for pod labels in metrics`)
-	podNamespaceLabel          = flag.String("pod-namespace-label", "kubernetes_namespace", `Label name to look for pod namespaces`)
-	podNameLabel               = flag.String("pod-name-label", "kubernetes_pod_name", `Label name to look for pod names`)
-	ctrNamespaceLabel          = flag.String("container-namespace-label", "namespace", `Label name to look for container namespaces`)
-	ctrPodNameLabel            = flag.String("container-pod-name-label", "pod_name", `Label name to look for container pod names`)
-	ctrNameLabel               = flag.String("container-name-label", "name", `Label name to look for container names`)
-	vpaObjectNamespace         = flag.String("vpa-object-namespace", apiv1.NamespaceAll, "Namespace to search for VPA objects and pod stats. Empty means all namespaces will be used. Must not be used if ignored-vpa-object-namespaces is set.")
-	ignoredVpaObjectNamespaces = flag.String("ignored-vpa-object-namespaces", "", "Comma separated list of namespaces to ignore. Must not be used if vpa-object-namespace is used.")
-	username                   = flag.String("username", "", "The username used in the prometheus server basic auth")
-	password                   = flag.String("password", "", "The password used in the prometheus server basic auth")
-	memorySaver                = flag.Bool("memory-saver", false, `If true, only track pods which have an associated VPA`)
-	// external metrics provider config
-	useExternalMetrics   = flag.Bool("use-external-metrics", false, "ALPHA.  Use an external metrics provider instead of metrics_server.")
-	externalCpuMetric    = flag.String("external-metrics-cpu-metric", "", "ALPHA.  Metric to use with external metrics provider for CPU usage.")
-	externalMemoryMetric = flag.String("external-metrics-memory-metric", "", "ALPHA.  Metric to use with external metrics provider for memory usage.")
-)
-
-// Aggregation configuration flags
-var (
-	memoryAggregationInterval      = flag.Duration("memory-aggregation-interval", model.DefaultMemoryAggregationInterval, `The length of a single interval, for which the peak memory usage is computed. Memory usage peaks are aggregated in multiples of this interval. In other words there is one memory usage sample per interval (the maximum usage over that interval)`)
-	memoryAggregationIntervalCount = flag.Int64("memory-aggregation-interval-count", model.DefaultMemoryAggregationIntervalCount, `The number of consecutive memory-aggregation-intervals which make up the MemoryAggregationWindowLength which in turn is the period for memory usage aggregation by VPA. In other words, MemoryAggregationWindowLength = memory-aggregation-interval * memory-aggregation-interval-count.`)
-	memoryHistogramDecayHalfLife   = flag.Duration("memory-histogram-decay-half-life", model.DefaultMemoryHistogramDecayHalfLife, `The amount of time it takes a historical memory usage sample to lose half of its weight. In other words, a fresh usage sample is twice as 'important' as one with age equal to the half life period.`)
-	cpuHistogramDecayHalfLife      = flag.Duration("cpu-histogram-decay-half-life", model.DefaultCPUHistogramDecayHalfLife, `The amount of time it takes a historical CPU usage sample to lose half of its weight.`)
-	oomBumpUpRatio                 = flag.Float64("oom-bump-up-ratio", model.DefaultOOMBumpUpRatio, `The memory bump up ratio when OOM occurred, default is 1.2.`)
-	oomMinBumpUp                   = flag.Float64("oom-min-bump-up-bytes", model.DefaultOOMMinBumpUp, `The minimal increase of memory when OOM occurred in bytes, default is 100 * 1024 * 1024`)
-)
-
-// Post processors flags
-var (
-	// CPU as integer to benefit for CPU management Static Policy ( https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy )
-	postProcessorCPUasInteger = flag.Bool("cpu-integer-post-processor-enabled", false, "Enable the cpu-integer recommendation post processor. The post processor will round up CPU recommendations to a whole CPU for pods which were opted in by setting an appropriate label on VPA object (experimental)")
 )
 
 const (
@@ -114,35 +66,37 @@ const (
 	defaultResyncPeriod               time.Duration = 10 * time.Minute
 )
 
-func main() {
-	klog.InitFlags(nil)
+var config *recommender_config.RecommenderConfig
 
+func main() {
+	// Leader election needs to be initialized before any other flag, because it may be used in other flag's validation.
 	leaderElection := defaultLeaderElectionConfiguration()
 	componentbaseoptions.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
 
-	kube_flag.InitFlags()
-	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender: %v", common.VerticalPodAutoscalerVersion, *recommenderName)
+	config = recommender_config.InitRecommenderFlags()
 
-	if len(*vpaObjectNamespace) > 0 && len(*ignoredVpaObjectNamespaces) > 0 {
-		klog.Fatalf("--vpa-object-namespace and --ignored-vpa-object-namespaces are mutually exclusive and can't be set together.")
-	}
+	klog.V(1).InfoS("Vertical Pod Autoscaler Recommender", "version", common.VerticalPodAutoscalerVersion(), "recommenderName", config.RecommenderName)
 
-	healthCheck := metrics.NewHealthCheck(*metricsFetcherInterval * 5)
-	metrics.Initialize(*address, healthCheck)
+	ctx := context.Background()
+
+	healthCheck := metrics.NewHealthCheck(config.MetricsFetcherInterval * 5)
 	metrics_recommender.Register()
 	metrics_quality.Register()
+	metrics_resources.Register()
+	server.Initialize(&config.CommonFlags.EnableProfiling, healthCheck, &config.Address)
 
 	if !leaderElection.LeaderElect {
-		run(healthCheck)
+		run(ctx, healthCheck, config.CommonFlags)
 	} else {
 		id, err := os.Hostname()
 		if err != nil {
-			klog.Fatalf("Unable to get hostname: %v", err)
+			klog.ErrorS(err, "Unable to get hostname")
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
 		id = id + "_" + string(uuid.NewUUID())
 
-		config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
-		kubeClient := kube_client.NewForConfigOrDie(config)
+		kubeconfig := common.CreateKubeConfigOrDie(config.CommonFlags.KubeConfig, float32(config.CommonFlags.KubeApiQps), int(config.CommonFlags.KubeApiBurst))
+		kubeClient := kube_client.NewForConfigOrDie(kubeconfig)
 
 		lock, err := resourcelock.New(
 			leaderElection.ResourceLock,
@@ -155,10 +109,11 @@ func main() {
 			},
 		)
 		if err != nil {
-			klog.Fatalf("Unable to create leader election lock: %v", err)
+			klog.ErrorS(err, "Unable to create leader election lock")
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
 
-		leaderelection.RunOrDie(context.TODO(), leaderelection.LeaderElectionConfig{
+		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 			Lock:            lock,
 			LeaseDuration:   leaderElection.LeaseDuration.Duration,
 			RenewDeadline:   leaderElection.RenewDeadline.Duration,
@@ -166,7 +121,7 @@ func main() {
 			ReleaseOnCancel: true,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: func(_ context.Context) {
-					run(healthCheck)
+					run(ctx, healthCheck, config.CommonFlags)
 				},
 				OnStoppedLeading: func() {
 					klog.Fatal("lost master")
@@ -184,112 +139,151 @@ const (
 
 func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConfiguration {
 	return componentbaseconfig.LeaderElectionConfiguration{
-		LeaderElect:       false,
-		LeaseDuration:     metav1.Duration{Duration: defaultLeaseDuration},
-		RenewDeadline:     metav1.Duration{Duration: defaultRenewDeadline},
-		RetryPeriod:       metav1.Duration{Duration: defaultRetryPeriod},
-		ResourceLock:      resourcelock.LeasesResourceLock,
-		ResourceName:      "vpa-recommender",
+		LeaderElect:   false,
+		LeaseDuration: metav1.Duration{Duration: defaultLeaseDuration},
+		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
+		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
+		ResourceLock:  resourcelock.LeasesResourceLock,
+		// This was changed from "vpa-recommender" to avoid conflicts with managed VPA deployments.
+		ResourceName:      "vpa-recommender-lease",
 		ResourceNamespace: metav1.NamespaceSystem,
 	}
 }
 
-func run(healthCheck *metrics.HealthCheck) {
-	config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
-	kubeClient := kube_client.NewForConfigOrDie(config)
+func run(ctx context.Context, healthCheck *metrics.HealthCheck, commonFlag *common.CommonFlags) {
+	// Create a stop channel that will be used to signal shutdown
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	kubeConfig := common.CreateKubeConfigOrDie(commonFlag.KubeConfig, float32(commonFlag.KubeApiQps), int(commonFlag.KubeApiBurst))
+	kubeClient := kube_client.NewForConfigOrDie(kubeConfig)
 	clusterState := model.NewClusterState(aggregateContainerStateGCInterval)
-	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod, informers.WithNamespace(*vpaObjectNamespace))
-	controllerFetcher := controllerfetcher.NewControllerFetcher(config, kubeClient, factory, scaleCacheEntryFreshnessTime, scaleCacheEntryLifetime, scaleCacheEntryJitterFactor)
-	podLister, oomObserver := input.NewPodListerAndOOMObserver(kubeClient, *vpaObjectNamespace)
+	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod, informers.WithNamespace(commonFlag.VpaObjectNamespace))
+	controllerFetcher := controllerfetcher.NewControllerFetcher(kubeConfig, kubeClient, factory, scaleCacheEntryFreshnessTime, scaleCacheEntryLifetime, scaleCacheEntryJitterFactor)
+	podLister, oomObserver := input.NewPodListerAndOOMObserver(ctx, kubeClient, commonFlag.VpaObjectNamespace, stopCh)
 
-	model.InitializeAggregationsConfig(model.NewAggregationsConfig(*memoryAggregationInterval, *memoryAggregationIntervalCount, *memoryHistogramDecayHalfLife, *cpuHistogramDecayHalfLife, *oomBumpUpRatio, *oomMinBumpUp))
+	factory.Start(stopCh)
+	informerMap := factory.WaitForCacheSync(stopCh)
+	for kind, synced := range informerMap {
+		if !synced {
+			klog.ErrorS(nil, fmt.Sprintf("Could not sync cache for the %s informer", kind.String()))
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+		}
+	}
 
-	useCheckpoints := *storage != "prometheus"
+	model.InitializeAggregationsConfig(model.NewAggregationsConfig(config.MemoryAggregationInterval, config.MemoryAggregationIntervalCount, config.MemoryHistogramDecayHalfLife, config.CpuHistogramDecayHalfLife, config.OOMBumpUpRatio, config.OOMMinBumpUp))
+
+	useCheckpoints := config.Storage != "prometheus"
 
 	var postProcessors []routines.RecommendationPostProcessor
-	if *postProcessorCPUasInteger {
+	if config.PostProcessorCPUasInteger {
 		postProcessors = append(postProcessors, &routines.IntegerCPUPostProcessor{})
 	}
 
+	globalMaxAllowed := initGlobalMaxAllowed()
 	// CappingPostProcessor, should always come in the last position for post-processing
-	postProcessors = append(postProcessors, &routines.CappingPostProcessor{})
+	postProcessors = append(postProcessors, routines.NewCappingRecommendationProcessor(globalMaxAllowed))
 	var source input_metrics.PodMetricsLister
-	if *useExternalMetrics {
-		resourceMetrics := map[apiv1.ResourceName]string{}
-		if externalCpuMetric != nil && *externalCpuMetric != "" {
-			resourceMetrics[apiv1.ResourceCPU] = *externalCpuMetric
+	if config.UseExternalMetrics {
+		resourceMetrics := map[corev1.ResourceName]string{}
+		if config.ExternalCpuMetric != "" {
+			resourceMetrics[corev1.ResourceCPU] = config.ExternalCpuMetric
 		}
-		if externalMemoryMetric != nil && *externalMemoryMetric != "" {
-			resourceMetrics[apiv1.ResourceMemory] = *externalMemoryMetric
+		if config.ExternalMemoryMetric != "" {
+			resourceMetrics[corev1.ResourceMemory] = config.ExternalMemoryMetric
 		}
-		externalClientOptions := &input_metrics.ExternalClientOptions{ResourceMetrics: resourceMetrics, ContainerNameLabel: *ctrNameLabel}
-		klog.V(1).Infof("Using External Metrics: %+v", externalClientOptions)
-		source = input_metrics.NewExternalClient(config, clusterState, *externalClientOptions)
+		externalClientOptions := &input_metrics.ExternalClientOptions{ResourceMetrics: resourceMetrics, ContainerNameLabel: config.CtrNameLabel}
+		klog.V(1).InfoS("Using External Metrics", "options", externalClientOptions)
+		source = input_metrics.NewExternalClient(kubeConfig, clusterState, *externalClientOptions)
 	} else {
-		klog.V(1).Infof("Using Metrics Server.")
-		source = input_metrics.NewPodMetricsesSource(resourceclient.NewForConfigOrDie(config))
+		klog.V(1).InfoS("Using Metrics Server")
+		source = input_metrics.NewPodMetricsesSource(resourceclient.NewForConfigOrDie(kubeConfig))
 	}
 
-	ignoredNamespaces := strings.Split(*ignoredVpaObjectNamespaces, ",")
+	ignoredNamespaces := strings.Split(commonFlag.IgnoredVpaObjectNamespaces, ",")
 
 	clusterStateFeeder := input.ClusterStateFeederFactory{
 		PodLister:           podLister,
 		OOMObserver:         oomObserver,
 		KubeClient:          kubeClient,
-		MetricsClient:       input_metrics.NewMetricsClient(source, *vpaObjectNamespace, "default-metrics-client"),
-		VpaCheckpointClient: vpa_clientset.NewForConfigOrDie(config).AutoscalingV1(),
-		VpaLister:           vpa_api_util.NewVpasLister(vpa_clientset.NewForConfigOrDie(config), make(chan struct{}), *vpaObjectNamespace),
+		MetricsClient:       input_metrics.NewMetricsClient(source, commonFlag.VpaObjectNamespace, "default-metrics-client"),
+		VpaCheckpointClient: vpa_clientset.NewForConfigOrDie(kubeConfig).AutoscalingV1(),
+		VpaLister:           vpa_api_util.NewVpasLister(vpa_clientset.NewForConfigOrDie(kubeConfig), make(chan struct{}), commonFlag.VpaObjectNamespace),
+		VpaCheckpointLister: vpa_api_util.NewVpaCheckpointLister(vpa_clientset.NewForConfigOrDie(kubeConfig), make(chan struct{}), commonFlag.VpaObjectNamespace),
 		ClusterState:        clusterState,
-		SelectorFetcher:     target.NewVpaTargetSelectorFetcher(config, kubeClient, factory),
-		MemorySaveMode:      *memorySaver,
+		SelectorFetcher:     target.NewVpaTargetSelectorFetcher(kubeConfig, kubeClient, factory),
+		MemorySaveMode:      config.MemorySaver,
 		ControllerFetcher:   controllerFetcher,
-		RecommenderName:     *recommenderName,
+		RecommenderName:     config.RecommenderName,
 		IgnoredNamespaces:   ignoredNamespaces,
+		VpaObjectNamespace:  commonFlag.VpaObjectNamespace,
 	}.Make()
-	controllerFetcher.Start(context.Background(), scaleCacheLoopPeriod)
+	controllerFetcher.Start(ctx, scaleCacheLoopPeriod)
 
 	recommender := routines.RecommenderFactory{
-		ClusterState:                 clusterState,
-		ClusterStateFeeder:           clusterStateFeeder,
-		ControllerFetcher:            controllerFetcher,
-		CheckpointWriter:             checkpoint.NewCheckpointWriter(clusterState, vpa_clientset.NewForConfigOrDie(config).AutoscalingV1()),
-		VpaClient:                    vpa_clientset.NewForConfigOrDie(config).AutoscalingV1(),
-		PodResourceRecommender:       logic.CreatePodResourceRecommender(),
+		ClusterState:       clusterState,
+		ClusterStateFeeder: clusterStateFeeder,
+		ControllerFetcher:  controllerFetcher,
+		CheckpointWriter:   checkpoint.NewCheckpointWriter(clusterState, vpa_clientset.NewForConfigOrDie(kubeConfig).AutoscalingV1()),
+		VpaClient:          vpa_clientset.NewForConfigOrDie(kubeConfig).AutoscalingV1(),
+		PodResourceRecommender: logic.CreatePodResourceRecommender(logic.RecommendationConfig{
+			SafetyMarginFraction:       config.SafetyMarginFraction,
+			PodMinCPUMillicores:        config.PodMinCPUMillicores,
+			PodMinMemoryMb:             config.PodMinMemoryMb,
+			TargetCPUPercentile:        config.TargetCPUPercentile,
+			LowerBoundCPUPercentile:    config.LowerBoundCPUPercentile,
+			UpperBoundCPUPercentile:    config.UpperBoundCPUPercentile,
+			ConfidenceIntervalCPU:      config.ConfidenceIntervalCPU,
+			TargetMemoryPercentile:     config.TargetMemoryPercentile,
+			LowerBoundMemoryPercentile: config.LowerBoundMemoryPercentile,
+			UpperBoundMemoryPercentile: config.UpperBoundMemoryPercentile,
+			ConfidenceIntervalMemory:   config.ConfidenceIntervalMemory,
+		}),
+		RecommendationFormat: logic.RecommendationFormat{
+			HumanizeMemory:     config.HumanizeMemory,
+			RoundCPUMillicores: config.RoundCPUMillicores,
+			RoundMemoryBytes:   config.RoundMemoryBytes,
+		},
 		RecommendationPostProcessors: postProcessors,
-		CheckpointsGCInterval:        *checkpointsGCInterval,
+		CheckpointsGCInterval:        config.CheckpointsGCInterval,
+		CheckpointsWriteTimeout:      config.CheckpointsWriteTimeout,
 		UseCheckpoints:               useCheckpoints,
+		UpdateWorkerCount:            config.UpdateWorkerCount,
 	}.Make()
 
-	promQueryTimeout, err := time.ParseDuration(*queryTimeout)
+	promQueryTimeout, err := time.ParseDuration(config.QueryTimeout)
 	if err != nil {
-		klog.Fatalf("Could not parse --prometheus-query-timeout as a time.Duration: %v", err)
+		klog.ErrorS(err, "Could not parse --prometheus-query-timeout as a time.Duration")
+		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
 	if useCheckpoints {
-		recommender.GetClusterStateFeeder().InitFromCheckpoints()
+		recommender.GetClusterStateFeeder().InitFromCheckpoints(ctx)
 	} else {
 		config := history.PrometheusHistoryProviderConfig{
-			Address:                *prometheusAddress,
+			Address:                config.PrometheusAddress,
+			Insecure:               config.PrometheusInsecure,
 			QueryTimeout:           promQueryTimeout,
-			HistoryLength:          *historyLength,
-			HistoryResolution:      *historyResolution,
-			PodLabelPrefix:         *podLabelPrefix,
-			PodLabelsMetricName:    *podLabelsMetricName,
-			PodNamespaceLabel:      *podNamespaceLabel,
-			PodNameLabel:           *podNameLabel,
-			CtrNamespaceLabel:      *ctrNamespaceLabel,
-			CtrPodNameLabel:        *ctrPodNameLabel,
-			CtrNameLabel:           *ctrNameLabel,
-			CadvisorMetricsJobName: *prometheusJobName,
-			Namespace:              *vpaObjectNamespace,
-			PrometheusBasicAuthTransport: history.PrometheusBasicAuthTransport{
-				Username: *username,
-				Password: *password,
+			HistoryLength:          config.HistoryLength,
+			HistoryResolution:      config.HistoryResolution,
+			PodLabelPrefix:         config.PodLabelPrefix,
+			PodLabelsMetricName:    config.PodLabelsMetricName,
+			PodNamespaceLabel:      config.PodNamespaceLabel,
+			PodNameLabel:           config.PodNameLabel,
+			CtrNamespaceLabel:      config.CtrNamespaceLabel,
+			CtrPodNameLabel:        config.CtrPodNameLabel,
+			CtrNameLabel:           config.CtrNameLabel,
+			CadvisorMetricsJobName: config.PrometheusJobName,
+			Namespace:              commonFlag.VpaObjectNamespace,
+			Authentication: history.PrometheusCredentials{
+				BearerToken: config.PrometheusBearerToken,
+				Username:    config.Username,
+				Password:    config.Password,
 			},
 		}
 		provider, err := history.NewPrometheusHistoryProvider(config)
 		if err != nil {
-			klog.Fatalf("Could not initialize history provider: %v", err)
+			klog.ErrorS(err, "Could not initialize history provider")
+			klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 		}
 		recommender.GetClusterStateFeeder().InitFromHistoryProvider(provider)
 	}
@@ -297,9 +291,21 @@ func run(healthCheck *metrics.HealthCheck) {
 	// Start updating health check endpoint.
 	healthCheck.StartMonitoring()
 
-	ticker := time.Tick(*metricsFetcherInterval)
+	ticker := time.Tick(config.MetricsFetcherInterval)
 	for range ticker {
 		recommender.RunOnce()
 		healthCheck.UpdateLastActivity()
 	}
+}
+
+func initGlobalMaxAllowed() corev1.ResourceList {
+	result := make(corev1.ResourceList)
+	if !config.MaxAllowedCPU.IsZero() {
+		result[corev1.ResourceCPU] = config.MaxAllowedCPU.Quantity
+	}
+	if !config.MaxAllowedMemory.IsZero() {
+		result[corev1.ResourceMemory] = config.MaxAllowedMemory.Quantity
+	}
+
+	return result
 }

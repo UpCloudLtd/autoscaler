@@ -17,13 +17,16 @@ limitations under the License.
 package api
 
 import (
+	"errors"
 	"fmt"
 
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/klog/v2"
+
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/limitrange"
-	"k8s.io/klog/v2"
+	resourcehelpers "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/resources"
 )
 
 // NewCappingRecommendationProcessor constructs new RecommendationsProcessor that adjusts recommendation
@@ -42,7 +45,7 @@ var (
 	cappedProportionallyToMinLimit cappingAction = "capped to fit Min in container LimitRange"
 )
 
-func toCappingAnnotation(resourceName apiv1.ResourceName, action cappingAction) string {
+func toCappingAnnotation(resourceName corev1.ResourceName, action cappingAction) string {
 	return fmt.Sprintf("%s %s", resourceName, action)
 }
 
@@ -52,11 +55,19 @@ type cappingRecommendationProcessor struct {
 
 // Apply returns a recommendation for the given pod, adjusted to obey policy and limits.
 func (c *cappingRecommendationProcessor) Apply(
-	podRecommendation *vpa_types.RecommendedPodResources,
-	policy *vpa_types.PodResourcePolicy,
-	conditions []vpa_types.VerticalPodAutoscalerCondition,
-	pod *apiv1.Pod) (*vpa_types.RecommendedPodResources, ContainerToAnnotationsMap, error) {
+	vpa *vpa_types.VerticalPodAutoscaler,
+	pod *corev1.Pod) (*vpa_types.RecommendedPodResources, ContainerToAnnotationsMap, error) {
 	// TODO: Annotate if request enforced by maintaining proportion with limit and allowed limit range is in conflict with policy.
+
+	if vpa == nil {
+		return nil, nil, errors.New("cannot process nil vpa")
+	}
+	if pod == nil {
+		return nil, nil, errors.New("cannot process nil pod")
+	}
+
+	policy := vpa.Spec.ResourcePolicy
+	podRecommendation := vpa.Status.Recommendation
 
 	if podRecommendation == nil && policy == nil {
 		// If there is no recommendation and no policies have been defined then no recommendation can be computed.
@@ -76,16 +87,16 @@ func (c *cappingRecommendationProcessor) Apply(
 		container := getContainer(containerRecommendation.ContainerName, pod)
 
 		if container == nil {
-			klog.V(2).Infof("no matching Container found for recommendation %s", containerRecommendation.ContainerName)
+			klog.V(2).InfoS("No matching Container found for recommendation", "containerName", containerRecommendation.ContainerName, "vpa", klog.KObj(vpa))
 			continue
 		}
 
 		containerLimitRange, err := c.limitsRangeCalculator.GetContainerLimitRangeItem(pod.Namespace)
 		if err != nil {
-			klog.Warningf("failed to fetch LimitRange for %v namespace", pod.Namespace)
+			klog.V(0).InfoS("Failed to fetch LimitRange for namespace", "namespace", pod.Namespace)
 		}
 		updatedContainerResources, containerAnnotations, err := getCappedRecommendationForContainer(
-			*container, &containerRecommendation, policy, containerLimitRange)
+			pod, *container, &containerRecommendation, policy, containerLimitRange)
 
 		if len(containerAnnotations) != 0 {
 			containerToAnnotationsMap[containerRecommendation.ContainerName] = containerAnnotations
@@ -101,9 +112,10 @@ func (c *cappingRecommendationProcessor) Apply(
 
 // getCappedRecommendationForContainer returns a recommendation for the given container, adjusted to obey policy and limits.
 func getCappedRecommendationForContainer(
-	container apiv1.Container,
+	pod *corev1.Pod,
+	container corev1.Container,
 	containerRecommendation *vpa_types.RecommendedContainerResources,
-	policy *vpa_types.PodResourcePolicy, limitRange *apiv1.LimitRangeItem) (*vpa_types.RecommendedContainerResources, []string, error) {
+	policy *vpa_types.PodResourcePolicy, limitRange *corev1.LimitRangeItem) (*vpa_types.RecommendedContainerResources, []string, error) {
 	if containerRecommendation == nil {
 		return nil, nil, fmt.Errorf("no recommendation available for container name %v", container.Name)
 	}
@@ -115,9 +127,9 @@ func getCappedRecommendationForContainer(
 
 	cappingAnnotations := make([]string, 0)
 
-	process := func(recommendation apiv1.ResourceList, genAnnotations bool) {
-		// TODO: Add annotation if limitRange is conflicting with VPA policy.
-		limitAnnotations := applyContainerLimitRange(recommendation, container, limitRange)
+	process := func(recommendation corev1.ResourceList, genAnnotations bool) {
+		containerRequests, containerLimits := resourcehelpers.ContainerRequestsAndLimits(container.Name, pod)
+		limitAnnotations := applyContainerLimitRange(recommendation, containerRequests, containerLimits, limitRange)
 		annotations := applyVPAPolicy(recommendation, containerPolicy)
 		if genAnnotations {
 			cappingAnnotations = append(cappingAnnotations, limitAnnotations...)
@@ -125,7 +137,7 @@ func getCappedRecommendationForContainer(
 		}
 		// TODO: If limits and policy are conflicting, set some condition on the VPA.
 		if containerControlledValues == vpa_types.ContainerControlledValuesRequestsOnly {
-			annotations = capRecommendationToContainerLimit(recommendation, container)
+			annotations = capRecommendationToContainerLimit(recommendation, containerLimits)
 			if genAnnotations {
 				cappingAnnotations = append(cappingAnnotations, annotations...)
 			}
@@ -141,10 +153,10 @@ func getCappedRecommendationForContainer(
 
 // capRecommendationToContainerLimit makes sure recommendation is not above current limit for the container.
 // If this function makes adjustments appropriate annotations are returned.
-func capRecommendationToContainerLimit(recommendation apiv1.ResourceList, container apiv1.Container) []string {
+func capRecommendationToContainerLimit(recommendation corev1.ResourceList, containerLimits corev1.ResourceList) []string {
 	annotations := make([]string, 0)
 	// Iterate over limits set in the container. Unset means Infinite limit.
-	for resourceName, limit := range container.Resources.Limits {
+	for resourceName, limit := range containerLimits {
 		recommendedValue, found := recommendation[resourceName]
 		if found && recommendedValue.MilliValue() > limit.MilliValue() {
 			recommendation[resourceName] = limit
@@ -155,7 +167,7 @@ func capRecommendationToContainerLimit(recommendation apiv1.ResourceList, contai
 }
 
 // applyVPAPolicy updates recommendation if recommended resources are outside of limits defined in VPA resources policy
-func applyVPAPolicy(recommendation apiv1.ResourceList, policy *vpa_types.ContainerResourcePolicy) []string {
+func applyVPAPolicy(recommendation corev1.ResourceList, policy *vpa_types.ContainerResourcePolicy) []string {
 	if policy == nil {
 		return nil
 	}
@@ -177,23 +189,46 @@ func applyVPAPolicy(recommendation apiv1.ResourceList, policy *vpa_types.Contain
 
 func applyVPAPolicyForContainer(containerName string,
 	containerRecommendation *vpa_types.RecommendedContainerResources,
-	policy *vpa_types.PodResourcePolicy) (*vpa_types.RecommendedContainerResources, error) {
+	policy *vpa_types.PodResourcePolicy,
+	globalMaxAllowed corev1.ResourceList) (*vpa_types.RecommendedContainerResources, error) {
 	if containerRecommendation == nil {
 		return nil, fmt.Errorf("no recommendation available for container name %v", containerName)
 	}
 	cappedRecommendations := containerRecommendation.DeepCopy()
-	// containerPolicy can be nil (user does not have to configure it).
 	containerPolicy := GetContainerResourcePolicy(containerName, policy)
-	if containerPolicy == nil {
-		return cappedRecommendations, nil
+
+	var minAllowed corev1.ResourceList
+	if containerPolicy != nil {
+		minAllowed = containerPolicy.MinAllowed
 	}
 
-	process := func(recommendation apiv1.ResourceList) {
-		for resourceName, recommended := range recommendation {
-			cappedToMin, _ := maybeCapToPolicyMin(recommended, resourceName, containerPolicy)
-			recommendation[resourceName] = cappedToMin
-			cappedToMax, _ := maybeCapToPolicyMax(cappedToMin, resourceName, containerPolicy)
-			recommendation[resourceName] = cappedToMax
+	var maxAllowed corev1.ResourceList
+	if containerPolicy != nil {
+		// Deep copy containerPolicy.MaxAllowed as maxAllowed can later on be merged with globalMaxAllowed.
+		// Deep copy is needed to prevent unwanted modifications to containerPolicy.MaxAllowed.
+		maxAllowed = containerPolicy.MaxAllowed.DeepCopy()
+	}
+	if maxAllowed == nil {
+		maxAllowed = globalMaxAllowed
+	} else {
+		// Set resources from the global max allowed if the VPA max allowed is missing them.
+		for resourceName, quantity := range globalMaxAllowed {
+			if _, ok := maxAllowed[resourceName]; !ok {
+				maxAllowed[resourceName] = quantity
+			}
+		}
+	}
+
+	process := func(recommendation corev1.ResourceList) {
+		for resourceName := range recommendation {
+			if minAllowed != nil {
+				cappedToMin, _ := maybeCapToMin(recommendation[resourceName], resourceName, minAllowed)
+				recommendation[resourceName] = cappedToMin
+			}
+			if maxAllowed != nil {
+				cappedToMax, _ := maybeCapToMax(recommendation[resourceName], resourceName, maxAllowed)
+				recommendation[resourceName] = cappedToMax
+			}
 		}
 	}
 
@@ -204,28 +239,28 @@ func applyVPAPolicyForContainer(containerName string,
 	return cappedRecommendations, nil
 }
 
-func maybeCapToPolicyMin(recommended resource.Quantity, resourceName apiv1.ResourceName,
+func maybeCapToPolicyMin(recommended resource.Quantity, resourceName corev1.ResourceName,
 	containerPolicy *vpa_types.ContainerResourcePolicy) (resource.Quantity, bool) {
 	return maybeCapToMin(recommended, resourceName, containerPolicy.MinAllowed)
 }
 
-func maybeCapToPolicyMax(recommended resource.Quantity, resourceName apiv1.ResourceName,
+func maybeCapToPolicyMax(recommended resource.Quantity, resourceName corev1.ResourceName,
 	containerPolicy *vpa_types.ContainerResourcePolicy) (resource.Quantity, bool) {
 	return maybeCapToMax(recommended, resourceName, containerPolicy.MaxAllowed)
 }
 
-func maybeCapToMax(recommended resource.Quantity, resourceName apiv1.ResourceName,
-	max apiv1.ResourceList) (resource.Quantity, bool) {
-	maxResource, found := max[resourceName]
+func maybeCapToMax(recommended resource.Quantity, resourceName corev1.ResourceName,
+	maxAllowed corev1.ResourceList) (resource.Quantity, bool) {
+	maxResource, found := maxAllowed[resourceName]
 	if found && !maxResource.IsZero() && recommended.Cmp(maxResource) > 0 {
 		return maxResource, true
 	}
 	return recommended, false
 }
 
-func maybeCapToMin(recommended resource.Quantity, resourceName apiv1.ResourceName,
-	min apiv1.ResourceList) (resource.Quantity, bool) {
-	minResource, found := min[resourceName]
+func maybeCapToMin(recommended resource.Quantity, resourceName corev1.ResourceName,
+	minAllowed corev1.ResourceList) (resource.Quantity, bool) {
+	minResource, found := minAllowed[resourceName]
 	if found && !minResource.IsZero() && recommended.Cmp(minResource) < 0 {
 		return minResource, true
 	}
@@ -234,19 +269,16 @@ func maybeCapToMin(recommended resource.Quantity, resourceName apiv1.ResourceNam
 
 // ApplyVPAPolicy returns a recommendation, adjusted to obey policy.
 func ApplyVPAPolicy(podRecommendation *vpa_types.RecommendedPodResources,
-	policy *vpa_types.PodResourcePolicy) (*vpa_types.RecommendedPodResources, error) {
+	policy *vpa_types.PodResourcePolicy, globalMaxAllowed corev1.ResourceList) (*vpa_types.RecommendedPodResources, error) {
 	if podRecommendation == nil {
 		return nil, nil
-	}
-	if policy == nil {
-		return podRecommendation, nil
 	}
 
 	updatedRecommendations := []vpa_types.RecommendedContainerResources{}
 	for _, containerRecommendation := range podRecommendation.ContainerRecommendations {
 		containerName := containerRecommendation.ContainerName
 		updatedContainerResources, err := applyVPAPolicyForContainer(containerName,
-			&containerRecommendation, policy)
+			&containerRecommendation, policy, globalMaxAllowed)
 		if err != nil {
 			return nil, fmt.Errorf("cannot apply policy on recommendation for container name %v", containerName)
 		}
@@ -275,7 +307,7 @@ func GetRecommendationForContainer(containerName string, recommendation *vpa_typ
 	return nil
 }
 
-func getContainer(containerName string, pod *apiv1.Pod) *apiv1.Container {
+func getContainer(containerName string, pod *corev1.Pod) *corev1.Container {
 	for i, container := range pod.Spec.Containers {
 		if container.Name == containerName {
 			return &pod.Spec.Containers[i]
@@ -285,13 +317,15 @@ func getContainer(containerName string, pod *apiv1.Pod) *apiv1.Container {
 }
 
 // applyContainerLimitRange updates recommendation if recommended resources are outside of limits defined in VPA resources policy
-func applyContainerLimitRange(recommendation apiv1.ResourceList, container apiv1.Container, limitRange *apiv1.LimitRangeItem) []string {
+func applyContainerLimitRange(recommendation corev1.ResourceList,
+	containerRequests corev1.ResourceList, containerLimits corev1.ResourceList,
+	limitRange *corev1.LimitRangeItem) []string {
 	annotations := make([]string, 0)
 	if limitRange == nil {
 		return annotations
 	}
-	maxAllowedRecommendation := getMaxAllowedRecommendation(recommendation, container, limitRange)
-	minAllowedRecommendation := getMinAllowedRecommendation(recommendation, container, limitRange)
+	maxAllowedRecommendation := getMaxAllowedRecommendation(recommendation, containerRequests, containerLimits, limitRange)
+	minAllowedRecommendation := getMinAllowedRecommendation(recommendation, containerRequests, containerLimits, limitRange)
 	for resourceName, recommended := range recommendation {
 		cappedToMin, isCapped := maybeCapToMin(recommended, resourceName, minAllowedRecommendation)
 		recommendation[resourceName] = cappedToMin
@@ -307,55 +341,58 @@ func applyContainerLimitRange(recommendation apiv1.ResourceList, container apiv1
 	return annotations
 }
 
-func getMaxAllowedRecommendation(recommendation apiv1.ResourceList, container apiv1.Container,
-	podLimitRange *apiv1.LimitRangeItem) apiv1.ResourceList {
+func getMaxAllowedRecommendation(recommendation corev1.ResourceList,
+	containerRequests corev1.ResourceList, containerLimits corev1.ResourceList,
+	podLimitRange *corev1.LimitRangeItem) corev1.ResourceList {
 	if podLimitRange == nil {
-		return apiv1.ResourceList{}
+		return corev1.ResourceList{}
 	}
-	return getBoundaryRecommendation(recommendation, container, podLimitRange.Max, podLimitRange.Default)
+	return getBoundaryRecommendation(recommendation, containerRequests, containerLimits, podLimitRange.Max, podLimitRange.Default)
 }
 
-func getMinAllowedRecommendation(recommendation apiv1.ResourceList, container apiv1.Container,
-	podLimitRange *apiv1.LimitRangeItem) apiv1.ResourceList {
+func getMinAllowedRecommendation(recommendation corev1.ResourceList,
+	containerRequests corev1.ResourceList, containerLimits corev1.ResourceList,
+	podLimitRange *corev1.LimitRangeItem) corev1.ResourceList {
 	// Both limit and request must be higher than min set in the limit range:
 	// https://github.com/kubernetes/kubernetes/blob/016e9d5c06089774c6286fd825302cbae661a446/plugin/pkg/admission/limitranger/admission.go#L303
 	if podLimitRange == nil {
-		return apiv1.ResourceList{}
+		return corev1.ResourceList{}
 	}
-	minForLimit := getBoundaryRecommendation(recommendation, container, podLimitRange.Min, podLimitRange.Default)
+	minForLimit := getBoundaryRecommendation(recommendation, containerRequests, containerLimits, podLimitRange.Min, podLimitRange.Default)
 	minForRequest := podLimitRange.Min
 	if minForRequest == nil {
 		return minForLimit
 	}
 	result := minForLimit
 	if minForRequest.Cpu() != nil && minForRequest.Cpu().Cmp(*minForLimit.Cpu()) > 0 {
-		result[apiv1.ResourceCPU] = *minForRequest.Cpu()
+		result[corev1.ResourceCPU] = *minForRequest.Cpu()
 	}
 	if minForRequest.Memory() != nil && minForRequest.Memory().Cmp(*minForLimit.Memory()) > 0 {
-		result[apiv1.ResourceMemory] = *minForRequest.Memory()
+		result[corev1.ResourceMemory] = *minForRequest.Memory()
 	}
 	return result
 }
 
-func getBoundaryRecommendation(recommendation apiv1.ResourceList, container apiv1.Container,
-	boundaryLimit, defaultLimit apiv1.ResourceList) apiv1.ResourceList {
+func getBoundaryRecommendation(recommendation corev1.ResourceList,
+	containerRequests corev1.ResourceList, containerLimits corev1.ResourceList,
+	boundaryLimit, defaultLimit corev1.ResourceList) corev1.ResourceList {
 	if boundaryLimit == nil {
-		return apiv1.ResourceList{}
+		return corev1.ResourceList{}
 	}
-	boundaryCpu := GetBoundaryRequest(apiv1.ResourceCPU, container.Resources.Requests.Cpu(), container.Resources.Limits.Cpu(), boundaryLimit.Cpu(), defaultLimit.Cpu())
-	boundaryMem := GetBoundaryRequest(apiv1.ResourceMemory, container.Resources.Requests.Memory(), container.Resources.Limits.Memory(), boundaryLimit.Memory(), defaultLimit.Memory())
-	return apiv1.ResourceList{
-		apiv1.ResourceCPU:    *boundaryCpu,
-		apiv1.ResourceMemory: *boundaryMem,
+	boundaryCpu := GetBoundaryRequest(corev1.ResourceCPU, containerRequests.Cpu(), containerLimits.Cpu(), boundaryLimit.Cpu(), defaultLimit.Cpu())
+	boundaryMem := GetBoundaryRequest(corev1.ResourceMemory, containerRequests.Memory(), containerLimits.Memory(), boundaryLimit.Memory(), defaultLimit.Memory())
+	return corev1.ResourceList{
+		corev1.ResourceCPU:    *boundaryCpu,
+		corev1.ResourceMemory: *boundaryMem,
 	}
 }
 
 type containerWithRecommendation struct {
-	container      *apiv1.Container
+	container      *corev1.Container
 	recommendation *vpa_types.RecommendedContainerResources
 }
 
-func zipContainersWithRecommendations(resources []vpa_types.RecommendedContainerResources, pod *apiv1.Pod) []containerWithRecommendation {
+func zipContainersWithRecommendations(resources []vpa_types.RecommendedContainerResources, pod *corev1.Pod) []containerWithRecommendation {
 	result := make([]containerWithRecommendation, 0)
 	for _, container := range pod.Spec.Containers {
 		recommendation := getRecommendationForContainer(container.Name, resources)
@@ -365,8 +402,8 @@ func zipContainersWithRecommendations(resources []vpa_types.RecommendedContainer
 }
 
 func applyPodLimitRange(resources []vpa_types.RecommendedContainerResources,
-	pod *apiv1.Pod, limitRange apiv1.LimitRangeItem, resourceName apiv1.ResourceName,
-	fieldGetter func(vpa_types.RecommendedContainerResources) *apiv1.ResourceList) []vpa_types.RecommendedContainerResources {
+	pod *corev1.Pod, limitRange corev1.LimitRangeItem, resourceName corev1.ResourceName,
+	fieldGetter func(vpa_types.RecommendedContainerResources) *corev1.ResourceList) []vpa_types.RecommendedContainerResources {
 	minLimit := limitRange.Min[resourceName]
 	maxLimit := limitRange.Max[resourceName]
 	defaultLimit := limitRange.Default[resourceName]
@@ -375,8 +412,9 @@ func applyPodLimitRange(resources []vpa_types.RecommendedContainerResources,
 	var sumLimit, sumRecommendation resource.Quantity
 	for _, containerWithRecommendation := range containersWithRecommendations {
 		container := containerWithRecommendation.container
-		limit := container.Resources.Limits[resourceName]
-		request := container.Resources.Requests[resourceName]
+		requests, limits := resourcehelpers.ContainerRequestsAndLimits(container.Name, pod)
+		limit := limits[resourceName]
+		request := requests[resourceName]
 		var recommendation resource.Quantity
 		if containerWithRecommendation.recommendation == nil {
 			// No recommendation, don't change the container
@@ -402,10 +440,10 @@ func applyPodLimitRange(resources []vpa_types.RecommendedContainerResources,
 			}
 			request := (*fieldGetter(*containerWithRecommendation.recommendation))[resourceName]
 			var cappedContainerRequest *resource.Quantity
-			if resourceName == apiv1.ResourceMemory {
+			if resourceName == corev1.ResourceMemory {
 				cappedContainerRequest, _ = scaleQuantityProportionallyMem(&request, &sumRecommendation, &minLimit, roundUpToFullUnit)
 			} else {
-				cappedContainerRequest, _ = scaleQuantityProportionallyCPU(&request, &sumRecommendation, &minLimit, noRounding)
+				cappedContainerRequest, _ = scaleQuantityProportionallyCPU(&request, &sumRecommendation, &minLimit, roundUpToFullUnit)
 			}
 			(*fieldGetter(*containerWithRecommendation.recommendation))[resourceName] = *cappedContainerRequest
 		}
@@ -427,16 +465,17 @@ func applyPodLimitRange(resources []vpa_types.RecommendedContainerResources,
 		var limit resource.Quantity
 		if containerWithRecommendation.recommendation == nil {
 			// No recommendation, don't change the container
-			limit = containerWithRecommendation.container.Resources.Limits[resourceName]
+			_, limits := resourcehelpers.ContainerRequestsAndLimits(containerWithRecommendation.container.Name, pod)
+			limit = limits[resourceName]
 		} else {
 			limit = (*fieldGetter(*containerWithRecommendation.recommendation))[resourceName]
 		}
 
 		var cappedContainerRequest *resource.Quantity
-		if resourceName == apiv1.ResourceMemory {
+		if resourceName == corev1.ResourceMemory {
 			cappedContainerRequest, _ = scaleQuantityProportionallyMem(&limit, &sumLimit, &targetTotalLimit, roundDownToFullUnit)
 		} else {
-			cappedContainerRequest, _ = scaleQuantityProportionallyCPU(&limit, &sumLimit, &targetTotalLimit, noRounding)
+			cappedContainerRequest, _ = scaleQuantityProportionallyCPU(&limit, &sumLimit, &targetTotalLimit, roundDownToFullUnit)
 		}
 		(*fieldGetter(*containerWithRecommendation.recommendation))[resourceName] = *cappedContainerRequest
 	}
@@ -452,7 +491,7 @@ func recommendationForContainerExists(containerName string, containerRecommendat
 	return false
 }
 
-func insertRequestsForMissingRecommendations(containerRecommendations []vpa_types.RecommendedContainerResources, pod *apiv1.Pod) []vpa_types.RecommendedContainerResources {
+func insertRequestsForMissingRecommendations(containerRecommendations []vpa_types.RecommendedContainerResources, pod *corev1.Pod) []vpa_types.RecommendedContainerResources {
 	result := make([]vpa_types.RecommendedContainerResources, 0)
 	for _, r := range containerRecommendations {
 		result = append(result, *r.DeepCopy())
@@ -461,19 +500,20 @@ func insertRequestsForMissingRecommendations(containerRecommendations []vpa_type
 		if recommendationForContainerExists(container.Name, containerRecommendations) {
 			continue
 		}
-		if len(container.Resources.Requests) == 0 {
+		requests, _ := resourcehelpers.ContainerRequestsAndLimits(container.Name, pod)
+		if len(requests) == 0 {
 			continue
 		}
 		result = append(result, vpa_types.RecommendedContainerResources{
 			ContainerName: container.Name,
-			Target:        container.Resources.Requests.DeepCopy(),
+			Target:        requests,
 		})
 	}
 	return result
 }
 
 func (c *cappingRecommendationProcessor) capProportionallyToPodLimitRange(
-	containerRecommendations []vpa_types.RecommendedContainerResources, pod *apiv1.Pod) ([]vpa_types.RecommendedContainerResources, error) {
+	containerRecommendations []vpa_types.RecommendedContainerResources, pod *corev1.Pod) ([]vpa_types.RecommendedContainerResources, error) {
 	podLimitRange, err := c.limitsRangeCalculator.GetPodLimitRangeItem(pod.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("error obtaining limit range: %s", err)
@@ -481,18 +521,18 @@ func (c *cappingRecommendationProcessor) capProportionallyToPodLimitRange(
 	if podLimitRange == nil {
 		return containerRecommendations, nil
 	}
-	getTarget := func(rl vpa_types.RecommendedContainerResources) *apiv1.ResourceList { return &rl.Target }
-	getUpper := func(rl vpa_types.RecommendedContainerResources) *apiv1.ResourceList { return &rl.UpperBound }
-	getLower := func(rl vpa_types.RecommendedContainerResources) *apiv1.ResourceList { return &rl.LowerBound }
+	getTarget := func(rl vpa_types.RecommendedContainerResources) *corev1.ResourceList { return &rl.Target }
+	getUpper := func(rl vpa_types.RecommendedContainerResources) *corev1.ResourceList { return &rl.UpperBound }
+	getLower := func(rl vpa_types.RecommendedContainerResources) *corev1.ResourceList { return &rl.LowerBound }
 
 	containerRecommendations = insertRequestsForMissingRecommendations(containerRecommendations, pod)
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceCPU, getUpper)
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceMemory, getUpper)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceCPU, getUpper)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceMemory, getUpper)
 
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceCPU, getTarget)
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceMemory, getTarget)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceCPU, getTarget)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceMemory, getTarget)
 
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceCPU, getLower)
-	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, apiv1.ResourceMemory, getLower)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceCPU, getLower)
+	containerRecommendations = applyPodLimitRange(containerRecommendations, pod, *podLimitRange, corev1.ResourceMemory, getLower)
 	return containerRecommendations, nil
 }

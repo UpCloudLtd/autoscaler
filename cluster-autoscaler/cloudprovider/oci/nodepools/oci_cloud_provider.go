@@ -10,9 +10,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
+	npconsts "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools/consts"
 	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
+	"strings"
 )
 
 // OciCloudProvider creates a cloud provider object that is compatible with node pools
@@ -54,6 +56,10 @@ func (ocp *OciCloudProvider) NodeGroupForNode(n *apiv1.Node) (cloudprovider.Node
 		return nil, err
 	}
 
+	// self-managed-nodes aren't expected to be managed by cluster-autoscaler
+	if ociRef.IsNodeSelfManaged {
+		return nil, nil
+	}
 	ng, err := ocp.manager.GetNodePoolForInstance(ociRef)
 
 	// this instance may be part of a node pool that the autoscaler does not handle
@@ -70,8 +76,32 @@ func (ocp *OciCloudProvider) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider.G
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider
-func (ocp *OciCloudProvider) HasInstance(n *apiv1.Node) (bool, error) {
-	return true, cloudprovider.ErrNotImplemented
+func (ocp *OciCloudProvider) HasInstance(node *apiv1.Node) (bool, error) {
+	instance, err := ocicommon.NodeToOciRef(node)
+	if err != nil {
+		return true, err
+	}
+	if instance.IsNodeSelfManaged {
+		return false, nil
+	}
+	np, err := ocp.manager.GetNodePoolForInstance(instance)
+	if err != nil {
+		return true, err
+	}
+	// Properly handle virtual nodes and missing node pool IDs to prevent crashes
+	if np == nil || np.Id() == "" || strings.Contains(instance.InstanceID, npconsts.OciVirtualNodeResourceIdent) {
+		return false, cloudprovider.ErrNotImplemented
+	}
+	nodes, err := ocp.manager.GetNodePoolNodes(np)
+	if err != nil {
+		return true, err
+	}
+	for _, n := range nodes {
+		if n.Id == instance.InstanceID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.

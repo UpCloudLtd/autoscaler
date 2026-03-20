@@ -24,9 +24,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // OnScaleUpFunc is a function called on node group increase in TestCloudProvider.
@@ -45,10 +45,14 @@ type OnNodeGroupDeleteFunc func(string) error
 // HasInstance is a function called to determine if a node has been removed from the cloud provider.
 type HasInstance func(string) (bool, error)
 
+// NodeGpuConfig is a function that returns the GPU config for a given node.
+type NodeGpuConfig func(node *apiv1.Node) *cloudprovider.GpuConfig
+
 // TestCloudProvider is a dummy cloud provider to be used in tests.
 type TestCloudProvider struct {
 	sync.Mutex
 	nodes             map[string]string
+	errNodes          map[string]bool
 	groups            map[string]cloudprovider.NodeGroup
 	onScaleUp         func(string, int) error
 	onScaleDown       func(string, string) error
@@ -56,50 +60,110 @@ type TestCloudProvider struct {
 	onNodeGroupDelete func(string) error
 	hasInstance       func(string) (bool, error)
 	machineTypes      []string
-	machineTemplates  map[string]*schedulerframework.NodeInfo
+	machineTemplates  map[string]*framework.NodeInfo
 	priceModel        cloudprovider.PricingModel
 	resourceLimiter   *cloudprovider.ResourceLimiter
+	nodeGpuConfig     func(node *apiv1.Node) *cloudprovider.GpuConfig
 }
 
-// NewTestCloudProvider builds new TestCloudProvider
-func NewTestCloudProvider(onScaleUp OnScaleUpFunc, onScaleDown OnScaleDownFunc) *TestCloudProvider {
-	return &TestCloudProvider{
+// TestCloudProviderBuilder is used to create CloudProvider
+type TestCloudProviderBuilder struct {
+	builders []func(p *TestCloudProvider)
+}
+
+// NewTestCloudProviderBuilder returns a new test cloud provider builder
+func NewTestCloudProviderBuilder() *TestCloudProviderBuilder {
+	return &TestCloudProviderBuilder{}
+}
+
+// WithOnScaleUp adds scale-up handle function to provider
+func (b *TestCloudProviderBuilder) WithOnScaleUp(onScaleUp OnScaleUpFunc) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.onScaleUp = onScaleUp
+	})
+	return b
+}
+
+// WithOnScaleDown adds scale-down handle function to provider
+func (b *TestCloudProviderBuilder) WithOnScaleDown(onScaleDown OnScaleDownFunc) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.onScaleDown = onScaleDown
+	})
+	return b
+}
+
+// WithOnNodeGroupCreate adds node group creation handle function to provider
+func (b *TestCloudProviderBuilder) WithOnNodeGroupCreate(onNodeGroupCreate OnNodeGroupCreateFunc) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.onNodeGroupCreate = onNodeGroupCreate
+	})
+	return b
+}
+
+// WithOnNodeGroupDelete adds node group deletion handle function to provider
+func (b *TestCloudProviderBuilder) WithOnNodeGroupDelete(onNodeGroupDelete OnNodeGroupDeleteFunc) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.onNodeGroupDelete = onNodeGroupDelete
+	})
+	return b
+}
+
+// WithMachineTypes adds machine types to provider
+func (b *TestCloudProviderBuilder) WithMachineTypes(machineTypes []string) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.machineTypes = machineTypes
+	})
+	return b
+}
+
+// WithMachineTemplates adds machine templates for provider
+func (b *TestCloudProviderBuilder) WithMachineTemplates(machineTemplates map[string]*framework.NodeInfo) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.machineTemplates = machineTemplates
+	})
+	return b
+}
+
+// WithHasInstance adds has instance handler to provider
+func (b *TestCloudProviderBuilder) WithHasInstance(hasInstance HasInstance) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.hasInstance = hasInstance
+	})
+	return b
+}
+
+// WithNodeGpuConfig adds has custom node gpu config handler to provider
+func (b *TestCloudProviderBuilder) WithNodeGpuConfig(nodeGpuConfig NodeGpuConfig) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		p.nodeGpuConfig = nodeGpuConfig
+	})
+	return b
+}
+
+// WithNodeProcessingError specifies nodes that should trigger error if present in provider arguments.
+// This method is used to test error handling.
+func (b *TestCloudProviderBuilder) WithNodeProcessingError(nodeNames []string) *TestCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestCloudProvider) {
+		for _, n := range nodeNames {
+			p.errNodes[n] = true
+		}
+	})
+	return b
+}
+
+// Build returns a built test cloud provider
+func (b *TestCloudProviderBuilder) Build() *TestCloudProvider {
+	p := &TestCloudProvider{
 		nodes:           make(map[string]string),
+		errNodes:        make(map[string]bool),
 		groups:          make(map[string]cloudprovider.NodeGroup),
-		onScaleUp:       onScaleUp,
-		onScaleDown:     onScaleDown,
 		resourceLimiter: cloudprovider.NewResourceLimiter(make(map[string]int64), make(map[string]int64)),
 	}
-}
 
-// NewTestAutoprovisioningCloudProvider builds new TestCloudProvider with autoprovisioning support
-func NewTestAutoprovisioningCloudProvider(onScaleUp OnScaleUpFunc, onScaleDown OnScaleDownFunc,
-	onNodeGroupCreate OnNodeGroupCreateFunc, onNodeGroupDelete OnNodeGroupDeleteFunc,
-	machineTypes []string, machineTemplates map[string]*schedulerframework.NodeInfo) *TestCloudProvider {
-	return &TestCloudProvider{
-		nodes:             make(map[string]string),
-		groups:            make(map[string]cloudprovider.NodeGroup),
-		onScaleUp:         onScaleUp,
-		onScaleDown:       onScaleDown,
-		onNodeGroupCreate: onNodeGroupCreate,
-		onNodeGroupDelete: onNodeGroupDelete,
-		machineTypes:      machineTypes,
-		machineTemplates:  machineTemplates,
-		resourceLimiter:   cloudprovider.NewResourceLimiter(make(map[string]int64), make(map[string]int64)),
+	for _, builder := range b.builders {
+		builder(p)
 	}
-}
-
-// NewTestNodeDeletionDetectionCloudProvider builds new TestCloudProvider with deletion detection support
-func NewTestNodeDeletionDetectionCloudProvider(onScaleUp OnScaleUpFunc, onScaleDown OnScaleDownFunc,
-	hasInstance HasInstance) *TestCloudProvider {
-	return &TestCloudProvider{
-		nodes:           make(map[string]string),
-		groups:          make(map[string]cloudprovider.NodeGroup),
-		onScaleUp:       onScaleUp,
-		onScaleDown:     onScaleDown,
-		hasInstance:     hasInstance,
-		resourceLimiter: cloudprovider.NewResourceLimiter(make(map[string]int64), make(map[string]int64)),
-	}
+	return p
 }
 
 // Name returns name of the cloud provider.
@@ -124,6 +188,9 @@ func (tcp *TestCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
 // GetNodeGpuConfig returns the label, type and resource name for the GPU added to node. If node doesn't have
 // any GPUs, it returns nil.
 func (tcp *TestCloudProvider) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider.GpuConfig {
+	if tcp.nodeGpuConfig != nil {
+		return tcp.nodeGpuConfig(node)
+	}
 	return gpu.GetNodeGPUFromCloudProvider(tcp, node)
 }
 
@@ -153,6 +220,9 @@ func (tcp *TestCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.
 	tcp.Lock()
 	defer tcp.Unlock()
 
+	if _, found := tcp.errNodes[node.Name]; found {
+		return nil, errors.NewAutoscalerErrorf(errors.CloudProviderError, "node %q encountered", node.Name)
+	}
 	groupName, found := tcp.nodes[node.Name]
 	if !found {
 		return nil, nil
@@ -172,6 +242,9 @@ func (tcp *TestCloudProvider) HasInstance(node *apiv1.Node) (bool, error) {
 	defer tcp.Unlock()
 	if tcp.hasInstance != nil {
 		return tcp.hasInstance(node.Name)
+	}
+	if _, found := tcp.errNodes[node.Name]; found {
+		return false, errors.NewAutoscalerErrorf(errors.CloudProviderError, "node %q encountered", node.Name)
 	}
 	_, found := tcp.nodes[node.Name]
 	return found, nil
@@ -214,21 +287,19 @@ func (tcp *TestCloudProvider) NewNodeGroup(machineType string, labels map[string
 	}, nil
 }
 
-// NewNodeGroupWithId creates a new node group with custom ID suffix.
-func (tcp *TestCloudProvider) NewNodeGroupWithId(machineType string, labels map[string]string, systemLabels map[string]string,
-	taints []apiv1.Taint, extraResources map[string]resource.Quantity, id string) (cloudprovider.NodeGroup, error) {
+// BuildNodeGroup returns a test node group.
+func (tcp *TestCloudProvider) BuildNodeGroup(id string, min, max, size int, exists bool, autoprovisioned bool, machineType string, opts *config.NodeGroupAutoscalingOptions) *TestNodeGroup {
 	return &TestNodeGroup{
 		cloudProvider:   tcp,
-		id:              "autoprovisioned-" + machineType + "-" + id,
-		minSize:         0,
-		maxSize:         1000,
-		targetSize:      0,
-		exist:           false,
-		autoprovisioned: true,
+		id:              id,
+		minSize:         min,
+		maxSize:         max,
+		targetSize:      size,
+		exist:           exists,
+		autoprovisioned: autoprovisioned,
 		machineType:     machineType,
-		labels:          labels,
-		taints:          taints,
-	}, nil
+		opts:            opts,
+	}
 }
 
 // InsertNodeGroup adds already created node group to test cloud provider.
@@ -239,37 +310,28 @@ func (tcp *TestCloudProvider) InsertNodeGroup(nodeGroup cloudprovider.NodeGroup)
 	tcp.groups[nodeGroup.Id()] = nodeGroup
 }
 
-// BuildNodeGroup returns a test node group.
-func (tcp *TestCloudProvider) BuildNodeGroup(id string, min, max, size int, autoprovisioned bool, machineType string, opts *config.NodeGroupAutoscalingOptions) *TestNodeGroup {
-	return &TestNodeGroup{
-		cloudProvider:   tcp,
-		id:              id,
-		minSize:         min,
-		maxSize:         max,
-		targetSize:      size,
-		exist:           true,
-		autoprovisioned: autoprovisioned,
-		machineType:     machineType,
-		opts:            opts,
-	}
-}
-
 // AddNodeGroup adds node group to test cloud provider.
 func (tcp *TestCloudProvider) AddNodeGroup(id string, min int, max int, size int) {
-	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, false, "", nil)
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, true, false, "", nil)
+	tcp.InsertNodeGroup(nodeGroup)
+}
+
+// AddUpcomingNodeGroup adds upcoming node group to test cloud provider.
+func (tcp *TestCloudProvider) AddUpcomingNodeGroup(id string, min int, max int, size int) {
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, false, false, "", nil)
 	tcp.InsertNodeGroup(nodeGroup)
 }
 
 // AddNodeGroupWithCustomOptions adds node group with custom options
 // to test cloud provider.
 func (tcp *TestCloudProvider) AddNodeGroupWithCustomOptions(id string, min int, max int, size int, opts *config.NodeGroupAutoscalingOptions) {
-	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, false, "", opts)
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, true, false, "", opts)
 	tcp.InsertNodeGroup(nodeGroup)
 }
 
 // AddAutoprovisionedNodeGroup adds node group to test cloud provider.
 func (tcp *TestCloudProvider) AddAutoprovisionedNodeGroup(id string, min int, max int, size int, machineType string) *TestNodeGroup {
-	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, true, machineType, nil)
+	nodeGroup := tcp.BuildNodeGroup(id, min, max, size, true, true, machineType, nil)
 	tcp.InsertNodeGroup(nodeGroup)
 	return nodeGroup
 }
@@ -306,6 +368,11 @@ func (tcp *TestCloudProvider) GetResourceLimiter() (*cloudprovider.ResourceLimit
 // SetResourceLimiter sets resource limiter.
 func (tcp *TestCloudProvider) SetResourceLimiter(resourceLimiter *cloudprovider.ResourceLimiter) {
 	tcp.resourceLimiter = resourceLimiter
+}
+
+// SetMachineTemplates sets template NodeInfos per-machine-type.
+func (tcp *TestCloudProvider) SetMachineTemplates(machineTemplates map[string]*framework.NodeInfo) {
+	tcp.machineTemplates = machineTemplates
 }
 
 // Cleanup this is a function to close resources associated with the cloud provider
@@ -452,7 +519,9 @@ func (tng *TestNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	id := tng.id
 	tng.targetSize -= len(nodes)
 	tng.Unlock()
-	if tng.opts != nil && tng.opts.ZeroOrMaxNodeScaling && tng.targetSize != 0 {
+	allNodes, _ := tng.Nodes()
+	currentSize := len(allNodes)
+	if tng.opts != nil && tng.opts.ZeroOrMaxNodeScaling && tng.targetSize != 0 && currentSize != len(nodes) {
 		return fmt.Errorf("TestNodeGroup: attempted to partially scale down a node group that should be scaled down atomically")
 	}
 	for _, node := range nodes {
@@ -462,6 +531,11 @@ func (tng *TestNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 		}
 	}
 	return nil
+}
+
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (tng *TestNodeGroup) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	return tng.DeleteNodes(nodes)
 }
 
 // Id returns an unique identifier of the node group.
@@ -505,7 +579,7 @@ func (tng *TestNodeGroup) Autoprovisioned() bool {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (tng *TestNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (tng *TestNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	if tng.cloudProvider.machineTemplates == nil {
 		return nil, cloudprovider.ErrNotImplemented
 	}

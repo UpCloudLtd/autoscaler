@@ -1,4 +1,4 @@
-// Copyright (c) 2016, 2018, 2023, Oracle and/or its affiliates.  All rights reserved.
+// Copyright (c) 2016, 2018, 2025, Oracle and/or its affiliates.  All rights reserved.
 // This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
 // Code generated. DO NOT EDIT.
 
@@ -6,11 +6,11 @@
 //
 // Use the Core Services API to manage resources such as virtual cloud networks (VCNs),
 // compute instances, and block storage volumes. For more information, see the console
-// documentation for the Networking (https://docs.cloud.oracle.com/iaas/Content/Network/Concepts/overview.htm),
-// Compute (https://docs.cloud.oracle.com/iaas/Content/Compute/Concepts/computeoverview.htm), and
-// Block Volume (https://docs.cloud.oracle.com/iaas/Content/Block/Concepts/overview.htm) services.
+// documentation for the Networking (https://docs.oracle.com/iaas/Content/Network/Concepts/overview.htm),
+// Compute (https://docs.oracle.com/iaas/Content/Compute/Concepts/computeoverview.htm), and
+// Block Volume (https://docs.oracle.com/iaas/Content/Block/Concepts/overview.htm) services.
 // The required permissions are documented in the
-// Details for the Core Services (https://docs.cloud.oracle.com/iaas/Content/Identity/Reference/corepolicyreference.htm) article.
+// Details for the Core Services (https://docs.oracle.com/iaas/Content/Identity/Reference/corepolicyreference.htm) article.
 //
 
 package core
@@ -36,8 +36,16 @@ type InstanceConfigurationCreateVolumeDetails struct {
 	// The OCID of the compartment that contains the volume.
 	CompartmentId *string `mandatory:"false" json:"compartmentId"`
 
+	// Specifies whether the auto-tune performance is enabled for this boot volume. This field is deprecated.
+	// Use the `InstanceConfigurationDetachedVolumeAutotunePolicy` instead to enable the volume for detached autotune.
+	IsAutoTuneEnabled *bool `mandatory:"false" json:"isAutoTuneEnabled"`
+
+	// The list of block volume replicas to be enabled for this volume
+	// in the specified destination availability domains.
+	BlockVolumeReplicas []InstanceConfigurationBlockVolumeReplicaDetails `mandatory:"false" json:"blockVolumeReplicas"`
+
 	// Defined tags for this resource. Each key is predefined and scoped to a
-	// namespace. For more information, see Resource Tags (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
+	// namespace. For more information, see Resource Tags (https://docs.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
 	// Example: `{"Operations": {"CostCenter": "42"}}`
 	DefinedTags map[string]map[string]interface{} `mandatory:"false" json:"definedTags"`
 
@@ -46,7 +54,7 @@ type InstanceConfigurationCreateVolumeDetails struct {
 	DisplayName *string `mandatory:"false" json:"displayName"`
 
 	// Free-form tags for this resource. Each tag is a simple key-value pair with no
-	// predefined name, type, or namespace. For more information, see Resource Tags (https://docs.cloud.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
+	// predefined name, type, or namespace. For more information, see Resource Tags (https://docs.oracle.com/iaas/Content/General/Concepts/resourcetags.htm).
 	// Example: `{"Department": "Finance"}`
 	FreeformTags map[string]string `mandatory:"false" json:"freeformTags"`
 
@@ -56,7 +64,7 @@ type InstanceConfigurationCreateVolumeDetails struct {
 
 	// The number of volume performance units (VPUs) that will be applied to this volume per GB,
 	// representing the Block Volume service's elastic performance options.
-	// See Block Volume Performance Levels (https://docs.cloud.oracle.com/iaas/Content/Block/Concepts/blockvolumeperformance.htm#perf_levels) for more information.
+	// See Block Volume Performance Levels (https://docs.oracle.com/iaas/Content/Block/Concepts/blockvolumeperformance.htm#perf_levels) for more information.
 	// Allowed values:
 	//   * `0`: Represents Lower Cost option.
 	//   * `10`: Represents Balanced option.
@@ -65,6 +73,9 @@ type InstanceConfigurationCreateVolumeDetails struct {
 	// For performance autotune enabled volumes, it would be the Default(Minimum) VPUs/GB.
 	VpusPerGB *int64 `mandatory:"false" json:"vpusPerGB"`
 
+	// The clusterPlacementGroup Id of the volume for volume placement.
+	ClusterPlacementGroupId *string `mandatory:"false" json:"clusterPlacementGroupId"`
+
 	// The size of the volume in GBs.
 	SizeInGBs *int64 `mandatory:"false" json:"sizeInGBs"`
 
@@ -72,6 +83,15 @@ type InstanceConfigurationCreateVolumeDetails struct {
 
 	// The list of autotune policies enabled for this volume.
 	AutotunePolicies []InstanceConfigurationAutotunePolicy `mandatory:"false" json:"autotunePolicies"`
+
+	// The OCID of the Vault service key which is the master encryption key for the block volume cross region backups, which will be used in the destination region to encrypt the backup's encryption keys.
+	// For more information about the Vault service and encryption keys, see
+	// Overview of Vault service (https://docs.oracle.com/iaas/Content/KeyManagement/Concepts/keyoverview.htm) and
+	// Using Keys (https://docs.oracle.com/iaas/Content/KeyManagement/Tasks/usingkeys.htm).
+	XrcKmsKeyId *string `mandatory:"false" json:"xrcKmsKeyId"`
+
+	// Reservations-enabled is a boolean field that allows to enable PR (Persistent Reservation) on a volume.
+	IsReservationsEnabled *bool `mandatory:"false" json:"isReservationsEnabled"`
 }
 
 func (m InstanceConfigurationCreateVolumeDetails) String() string {
@@ -93,17 +113,22 @@ func (m InstanceConfigurationCreateVolumeDetails) ValidateEnumValue() (bool, err
 // UnmarshalJSON unmarshals from json
 func (m *InstanceConfigurationCreateVolumeDetails) UnmarshalJSON(data []byte) (e error) {
 	model := struct {
-		AvailabilityDomain *string                                  `json:"availabilityDomain"`
-		BackupPolicyId     *string                                  `json:"backupPolicyId"`
-		CompartmentId      *string                                  `json:"compartmentId"`
-		DefinedTags        map[string]map[string]interface{}        `json:"definedTags"`
-		DisplayName        *string                                  `json:"displayName"`
-		FreeformTags       map[string]string                        `json:"freeformTags"`
-		KmsKeyId           *string                                  `json:"kmsKeyId"`
-		VpusPerGB          *int64                                   `json:"vpusPerGB"`
-		SizeInGBs          *int64                                   `json:"sizeInGBs"`
-		SourceDetails      instanceconfigurationvolumesourcedetails `json:"sourceDetails"`
-		AutotunePolicies   []instanceconfigurationautotunepolicy    `json:"autotunePolicies"`
+		AvailabilityDomain      *string                                          `json:"availabilityDomain"`
+		BackupPolicyId          *string                                          `json:"backupPolicyId"`
+		CompartmentId           *string                                          `json:"compartmentId"`
+		IsAutoTuneEnabled       *bool                                            `json:"isAutoTuneEnabled"`
+		BlockVolumeReplicas     []InstanceConfigurationBlockVolumeReplicaDetails `json:"blockVolumeReplicas"`
+		DefinedTags             map[string]map[string]interface{}                `json:"definedTags"`
+		DisplayName             *string                                          `json:"displayName"`
+		FreeformTags            map[string]string                                `json:"freeformTags"`
+		KmsKeyId                *string                                          `json:"kmsKeyId"`
+		VpusPerGB               *int64                                           `json:"vpusPerGB"`
+		ClusterPlacementGroupId *string                                          `json:"clusterPlacementGroupId"`
+		SizeInGBs               *int64                                           `json:"sizeInGBs"`
+		SourceDetails           instanceconfigurationvolumesourcedetails         `json:"sourceDetails"`
+		AutotunePolicies        []instanceconfigurationautotunepolicy            `json:"autotunePolicies"`
+		XrcKmsKeyId             *string                                          `json:"xrcKmsKeyId"`
+		IsReservationsEnabled   *bool                                            `json:"isReservationsEnabled"`
 	}{}
 
 	e = json.Unmarshal(data, &model)
@@ -117,6 +142,10 @@ func (m *InstanceConfigurationCreateVolumeDetails) UnmarshalJSON(data []byte) (e
 
 	m.CompartmentId = model.CompartmentId
 
+	m.IsAutoTuneEnabled = model.IsAutoTuneEnabled
+
+	m.BlockVolumeReplicas = make([]InstanceConfigurationBlockVolumeReplicaDetails, len(model.BlockVolumeReplicas))
+	copy(m.BlockVolumeReplicas, model.BlockVolumeReplicas)
 	m.DefinedTags = model.DefinedTags
 
 	m.DisplayName = model.DisplayName
@@ -126,6 +155,8 @@ func (m *InstanceConfigurationCreateVolumeDetails) UnmarshalJSON(data []byte) (e
 	m.KmsKeyId = model.KmsKeyId
 
 	m.VpusPerGB = model.VpusPerGB
+
+	m.ClusterPlacementGroupId = model.ClusterPlacementGroupId
 
 	m.SizeInGBs = model.SizeInGBs
 
@@ -151,6 +182,9 @@ func (m *InstanceConfigurationCreateVolumeDetails) UnmarshalJSON(data []byte) (e
 			m.AutotunePolicies[i] = nil
 		}
 	}
+	m.XrcKmsKeyId = model.XrcKmsKeyId
+
+	m.IsReservationsEnabled = model.IsReservationsEnabled
 
 	return
 }

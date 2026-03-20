@@ -31,9 +31,9 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules/safetoevict"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules/system"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules/terminal"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // Rule determines whether a given pod can be drained or not.
@@ -65,7 +65,7 @@ func Default(deleteOptions options.NodeDeleteOptions) Rules {
 
 		// Blocking checks
 		{rule: replicated.New(deleteOptions.SkipNodesWithCustomControllerPods)},
-		{rule: system.New(), skip: !deleteOptions.SkipNodesWithSystemPods},
+		{rule: system.New(deleteOptions.BspDisruptionTimeout), skip: !deleteOptions.SkipNodesWithSystemPods},
 		{rule: notsafetoevict.New()},
 		{rule: localstorage.New(), skip: !deleteOptions.SkipNodesWithLocalStorage},
 		{rule: pdbrule.New()},

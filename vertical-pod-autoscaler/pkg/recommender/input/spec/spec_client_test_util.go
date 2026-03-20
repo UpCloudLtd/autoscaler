@@ -20,21 +20,21 @@ import (
 	"fmt"
 
 	"github.com/stretchr/testify/mock"
-
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	listersv1 "k8s.io/client-go/listers/core/v1"
+
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
-	v1lister "k8s.io/client-go/listers/core/v1"
 )
 
 var scheme = runtime.NewScheme()
 var codecs = serializer.NewCodecFactory(scheme)
 
 func init() {
-	utilruntime.Must(v1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
 }
 
 const pod1Yaml = `
@@ -67,6 +67,19 @@ metadata:
   name: Pod2
   labels:
     Pod2LabelKey: Pod2LabelValue
+status:
+  containerStatuses:
+  - name: Name23
+    resources:
+      requests:
+        memory: "250Mi"
+        cpu: "30m"
+  initContainerStatuses:
+  - name: Name22-init
+    resources:
+      requests:
+        memory: "350Mi"
+        cpu: "40m"
 spec:
   containers:
   - name: Name21
@@ -81,20 +94,43 @@ spec:
       requests:
         memory: "4096Mi"
         cpu: "4000m"
+  - name: Name23
+    image: Name23Image
+    resources:
+      # Requests below will be ignored because
+      # requests are also defined in containerStatus.
+      requests:
+        memory: "1Mi"
+        cpu: "1m"
+  initContainers:
+  - name: Name21-init
+    image: Name21-initImage
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "40m"
+  - name: Name22-init
+    image: Name22-initImage
+    resources:
+      requests:
+        # Requests below will be ignored because
+        # requests are also defined in initContainerStatus.
+        memory: "1Mi"
+        cpu: "1m"
 `
 
 type podListerMock struct {
 	mock.Mock
 }
 
-func (m *podListerMock) List(selector labels.Selector) (ret []*v1.Pod, err error) {
+func (m *podListerMock) List(selector labels.Selector) (ret []*corev1.Pod, err error) {
 	args := m.Called()
-	return args.Get(0).([]*v1.Pod), args.Error(1)
+	return args.Get(0).([]*corev1.Pod), args.Error(1)
 }
 
-func (m *podListerMock) Pods(namespace string) v1lister.PodNamespaceLister {
+func (m *podListerMock) Pods(namespace string) listersv1.PodNamespaceLister {
 	args := m.Called()
-	return args.Get(0).(v1lister.PodNamespaceLister)
+	return args.Get(0).(listersv1.PodNamespaceLister)
 }
 
 type specClientTestCase struct {
@@ -114,9 +150,13 @@ func newSpecClientTestCase() *specClientTestCase {
 	containerSpec12 := newTestContainerSpec(podID1, "Name12", 1000, 1024*1024*1024)
 	containerSpec21 := newTestContainerSpec(podID2, "Name21", 2000, 2048*1024*1024)
 	containerSpec22 := newTestContainerSpec(podID2, "Name22", 4000, 4096*1024*1024)
+	containerSpec23 := newTestContainerSpec(podID2, "Name23", 30, 250*1024*1024)
 
-	podSpec1 := newTestPodSpec(podID1, containerSpec11, containerSpec12)
-	podSpec2 := newTestPodSpec(podID2, containerSpec21, containerSpec22)
+	initContainerSpec21 := newTestContainerSpec(podID2, "Name21-init", 40, 128*1024*1024)
+	initContainerSpec22 := newTestContainerSpec(podID2, "Name22-init", 40, 350*1024*1024)
+
+	podSpec1 := newTestPodSpec(podID1, []BasicContainerSpec{containerSpec11, containerSpec12}, nil)
+	podSpec2 := newTestPodSpec(podID2, []BasicContainerSpec{containerSpec21, containerSpec22, containerSpec23}, []BasicContainerSpec{initContainerSpec21, initContainerSpec22})
 
 	return &specClientTestCase{
 		podSpecs: []*BasicPodSpec{podSpec1, podSpec2},
@@ -140,11 +180,12 @@ func newTestContainerSpec(podID model.PodID, containerName string, milicores int
 	}
 }
 
-func newTestPodSpec(podId model.PodID, containerSpecs ...BasicContainerSpec) *BasicPodSpec {
+func newTestPodSpec(podId model.PodID, containerSpecs []BasicContainerSpec, initContainerSpecs []BasicContainerSpec) *BasicPodSpec {
 	return &BasicPodSpec{
-		ID:         podId,
-		PodLabels:  map[string]string{podId.PodName + "LabelKey": podId.PodName + "LabelValue"},
-		Containers: containerSpecs,
+		ID:             podId,
+		PodLabels:      map[string]string{podId.PodName + "LabelKey": podId.PodName + "LabelValue"},
+		Containers:     containerSpecs,
+		InitContainers: initContainerSpecs,
 	}
 }
 
@@ -155,19 +196,19 @@ func (tc *specClientTestCase) createFakeSpecClient() SpecClient {
 	return NewSpecClient(podListerMock)
 }
 
-func (tc *specClientTestCase) getFakePods() []*v1.Pod {
-	pods := []*v1.Pod{}
+func (tc *specClientTestCase) getFakePods() []*corev1.Pod {
+	pods := []*corev1.Pod{}
 	for _, yaml := range tc.podYamls {
 		pods = append(pods, newPod(yaml))
 	}
 	return pods
 }
 
-func newPod(yaml string) *v1.Pod {
+func newPod(yaml string) *corev1.Pod {
 	decode := codecs.UniversalDeserializer().Decode
 	obj, _, err := decode([]byte(yaml), nil, nil)
 	if err != nil {
 		fmt.Printf("%#v", err)
 	}
-	return obj.(*v1.Pod)
+	return obj.(*corev1.Pod)
 }

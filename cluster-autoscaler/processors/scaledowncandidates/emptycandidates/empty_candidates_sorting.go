@@ -23,20 +23,20 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 type nodeInfoGetter interface {
-	GetNodeInfo(nodeName string) (*schedulerframework.NodeInfo, error)
+	GetNodeInfo(nodeName string) (*framework.NodeInfo, error)
 }
 
 type nodeInfoGetterImpl struct {
 	c clustersnapshot.ClusterSnapshot
 }
 
-func (n *nodeInfoGetterImpl) GetNodeInfo(nodeName string) (*schedulerframework.NodeInfo, error) {
-	return n.c.NodeInfos().Get(nodeName)
+func (n *nodeInfoGetterImpl) GetNodeInfo(nodeName string) (*framework.NodeInfo, error) {
+	return n.c.GetNodeInfo(nodeName)
 }
 
 // NewNodeInfoGetter limits ClusterSnapshot interface to NodeInfoGet() method.
@@ -49,6 +49,7 @@ type EmptySorting struct {
 	nodeInfoGetter
 	deleteOptions     options.NodeDeleteOptions
 	drainabilityRules rules.Rules
+	isEmptyCache      map[string]bool
 }
 
 // NewEmptySortingProcessor return EmptySorting struct.
@@ -57,6 +58,7 @@ func NewEmptySortingProcessor(n nodeInfoGetter, deleteOptions options.NodeDelete
 		nodeInfoGetter:    n,
 		deleteOptions:     deleteOptions,
 		drainabilityRules: drainabilityRules,
+		isEmptyCache:      make(map[string]bool),
 	}
 }
 
@@ -68,7 +70,21 @@ func (p *EmptySorting) ScaleDownEarlierThan(node1, node2 *apiv1.Node) bool {
 	return false
 }
 
+// ResetState resets internal state before every sorting.
+func (p *EmptySorting) ResetState() {
+	p.isEmptyCache = make(map[string]bool)
+}
+
 func (p *EmptySorting) isNodeEmpty(node *apiv1.Node) bool {
+	if val, ok := p.isEmptyCache[node.Name]; ok {
+		return val
+	}
+	val := p.isNodeEmptyNoCache(node)
+	p.isEmptyCache[node.Name] = val
+	return val
+}
+
+func (p *EmptySorting) isNodeEmptyNoCache(node *apiv1.Node) bool {
 	nodeInfo, err := p.nodeInfoGetter.GetNodeInfo(node.Name)
 	if err != nil {
 		return false

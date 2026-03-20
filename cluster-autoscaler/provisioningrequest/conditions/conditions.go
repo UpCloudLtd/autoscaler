@@ -19,7 +19,7 @@ package conditions
 import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	v1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqwrapper"
 	"k8s.io/klog/v2"
@@ -59,14 +59,14 @@ const (
 )
 
 // ShouldCapacityBeBooked returns whether capacity should be booked.
-func ShouldCapacityBeBooked(pr *provreqwrapper.ProvisioningRequest) bool {
-	if ok, found := provisioningrequest.SupportedProvisioningClasses[pr.Spec.ProvisioningClassName]; !ok || !found {
+func ShouldCapacityBeBooked(pr *provreqwrapper.ProvisioningRequest, checkCapacityProcessorInstance string) bool {
+	if !provisioningrequest.SupportedProvisioningClass(pr.ProvisioningRequest, checkCapacityProcessorInstance) {
 		return false
 	}
 	conditions := pr.Status.Conditions
-	if apimeta.IsStatusConditionTrue(conditions, v1beta1.Failed) || apimeta.IsStatusConditionTrue(conditions, v1beta1.BookingExpired) {
+	if apimeta.IsStatusConditionTrue(conditions, v1.Failed) || apimeta.IsStatusConditionTrue(conditions, v1.BookingExpired) {
 		return false
-	} else if apimeta.IsStatusConditionTrue(conditions, v1beta1.Provisioned) {
+	} else if apimeta.IsStatusConditionTrue(conditions, v1.Provisioned) {
 		return true
 	}
 	return false
@@ -85,7 +85,7 @@ func AddOrUpdateCondition(pr *provreqwrapper.ProvisioningRequest, conditionType 
 	}
 	prevConditions := pr.Status.Conditions
 	switch conditionType {
-	case v1beta1.Provisioned, v1beta1.BookingExpired, v1beta1.Failed, v1beta1.Accepted:
+	case v1.Provisioned, v1.BookingExpired, v1.Failed, v1.Accepted:
 		conditionFound := false
 		for _, condition := range prevConditions {
 			if condition.Type == conditionType {

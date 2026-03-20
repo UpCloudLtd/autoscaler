@@ -6,10 +6,12 @@ package nodepools
 
 import (
 	"context"
+	"fmt"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/nodepools/consts"
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -18,6 +20,10 @@ import (
 
 	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
 	oke "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/vendor-internal/github.com/oracle/oci-go-sdk/v65/containerengine"
+)
+
+const (
+	autoDiscoveryCompartment = "ocid1.compartment.oc1.test-region.test"
 )
 
 func TestNodePoolFromArgs(t *testing.T) {
@@ -91,6 +97,16 @@ func TestGetNodePoolForInstance(t *testing.T) {
 	if np.Id() != "ocid2" {
 		t.Fatalf("got unexpected ocid %q ; wanted \"ocid2\"", np.Id())
 	}
+
+	// now verify node pool can be found via lookup up by instance id in cache
+	np, err = manager.GetNodePoolForInstance(ocicommon.OciRef{InstanceID: "virtualnode"})
+	if err != nil {
+		t.Fatalf("unexpected error: %+v", err)
+	}
+
+	if np != nil {
+		t.Fatalf("got unexpected ocid %q ; wanted nil", np.Id())
+	}
 }
 
 func TestGetNodePoolNodes(t *testing.T) {
@@ -119,8 +135,8 @@ func TestGetNodePoolNodes(t *testing.T) {
 			{
 				Id: common.String("node8"),
 				NodeError: &oke.NodeError{
-					Code:    common.String("InternalServerError"),
-					Message: common.String("blah blah quota exceeded blah blah"),
+					Code:    common.String("InternalError"),
+					Message: common.String("blah blah Out of host capacity blah blah"),
 				},
 			},
 		},
@@ -179,8 +195,8 @@ func TestGetNodePoolNodes(t *testing.T) {
 				State: cloudprovider.InstanceCreating,
 				ErrorInfo: &cloudprovider.InstanceErrorInfo{
 					ErrorClass:   cloudprovider.OutOfResourcesErrorClass,
-					ErrorCode:    "InternalServerError",
-					ErrorMessage: "blah blah quota exceeded blah blah",
+					ErrorCode:    "InternalError",
+					ErrorMessage: "blah blah Out of host capacity blah blah",
 				},
 			},
 		},
@@ -321,8 +337,15 @@ func TestBuildGenericLabels(t *testing.T) {
 
 type mockOKEClient struct{}
 
-func (c mockOKEClient) GetNodePool(context.Context, oke.GetNodePoolRequest) (oke.GetNodePoolResponse, error) {
-	return oke.GetNodePoolResponse{}, nil
+func (c mockOKEClient) GetNodePool(ctx context.Context, req oke.GetNodePoolRequest) (oke.GetNodePoolResponse, error) {
+	return oke.GetNodePoolResponse{
+		NodePool: oke.NodePool{
+			Id: req.NodePoolId,
+			NodeConfigDetails: &oke.NodePoolNodeConfigDetails{
+				Size: common.Int(1),
+			},
+		},
+	}, nil
 }
 func (c mockOKEClient) UpdateNodePool(context.Context, oke.UpdateNodePoolRequest) (oke.UpdateNodePoolResponse, error) {
 	return oke.UpdateNodePoolResponse{}, nil
@@ -334,6 +357,42 @@ func (c mockOKEClient) DeleteNode(context.Context, oke.DeleteNodeRequest) (oke.D
 			StatusCode: 200,
 		},
 	}, nil
+}
+
+func (c mockOKEClient) ListNodePools(ctx context.Context, req oke.ListNodePoolsRequest) (oke.ListNodePoolsResponse, error) {
+	// below test data added for auto-discovery tests
+	if req.CompartmentId != nil && *req.CompartmentId == autoDiscoveryCompartment {
+		freeformTags1 := map[string]string{
+			"ca-managed": "true",
+		}
+		freeformTags2 := map[string]string{
+			"ca-managed": "true",
+			"minSize":    "4",
+			"maxSize":    "10",
+		}
+		definedTags := map[string]map[string]interface{}{
+			"namespace": {
+				"foo": "bar",
+			},
+		}
+		resp := oke.ListNodePoolsResponse{
+			Items: []oke.NodePoolSummary{
+				{
+					Id:           common.String("node-pool-1"),
+					FreeformTags: freeformTags1,
+					DefinedTags:  definedTags,
+				},
+				{
+					Id:           common.String("node-pool-2"),
+					FreeformTags: freeformTags2,
+					DefinedTags:  definedTags,
+				},
+			},
+		}
+		return resp, nil
+	}
+
+	return oke.ListNodePoolsResponse{}, nil
 }
 
 func TestRemoveInstance(t *testing.T) {
@@ -360,16 +419,20 @@ func TestRemoveInstance(t *testing.T) {
 		},
 	}
 
-	if err := nodePoolCache.removeInstance(nodePoolId, instanceId1); err != nil {
+	if err := nodePoolCache.removeInstance(nodePoolId, instanceId1, instanceId1); err != nil {
 		t.Errorf("Remove instance #{instanceId1} incorrectly")
 	}
 
-	if err := nodePoolCache.removeInstance(nodePoolId, instanceId2); err != nil {
+	if err := nodePoolCache.removeInstance(nodePoolId, instanceId2, instanceId2); err != nil {
 		t.Errorf("Remove instance #{instanceId2} incorrectly")
 	}
 
-	if err := nodePoolCache.removeInstance(nodePoolId, instanceId3); err != nil {
+	if err := nodePoolCache.removeInstance(nodePoolId, instanceId3, instanceId3); err != nil {
 		t.Errorf("Fail to remove instance #{instanceId3}")
+	}
+
+	if err := nodePoolCache.removeInstance(nodePoolId, "", "badNode"); err == nil {
+		t.Errorf("Bad node should not have been deleted.")
 	}
 
 	if len(nodePoolCache.cache[nodePoolId].Nodes) != 3 {
@@ -382,5 +445,131 @@ func TestRemoveInstance(t *testing.T) {
 				t.Errorf("Cannot find the instance %q from node pool cache and it shouldn't be deleted", *node.Id)
 			}
 		}
+	}
+}
+
+func TestNodeGroupAutoDiscovery(t *testing.T) {
+	var nodeGroupArg = fmt.Sprintf("clusterId:ocid1.cluster.oc1.test-region.test,compartmentId:%s,nodepoolTags:ca-managed=true&namespace.foo=bar,min:1,max:5", autoDiscoveryCompartment)
+	nodeGroup, err := nodeGroupFromArg(nodeGroupArg)
+	if err != nil {
+		t.Errorf("Error: #{err}")
+	}
+	nodePoolCache := newNodePoolCache(nil)
+	nodePoolCache.okeClient = mockOKEClient{}
+
+	cloudConfig := &ocicommon.CloudConfig{}
+	cloudConfig.Global.RefreshInterval = 5 * time.Minute
+	cloudConfig.Global.CompartmentID = autoDiscoveryCompartment
+
+	manager := &ociManagerImpl{
+		nodePoolCache:   nodePoolCache,
+		nodeGroups:      []nodeGroupAutoDiscovery{*nodeGroup},
+		okeClient:       mockOKEClient{},
+		cfg:             cloudConfig,
+		staticNodePools: map[string]NodePool{},
+	}
+	// test data to use as initial nodepools
+	nodepool2 := &nodePool{
+		id: "node-pool-2", minSize: 1, maxSize: 5,
+	}
+	manager.staticNodePools[nodepool2.id] = nodepool2
+	nodepool3 := &nodePool{
+		id: "node-pool-3", minSize: 2, maxSize: 5,
+	}
+	manager.staticNodePools[nodepool3.id] = nodepool3
+
+	manager.forceRefresh()
+}
+
+func TestNodeGroupFromArg(t *testing.T) {
+	var nodeGroupArg = fmt.Sprintf("clusterId:ocid1.cluster.oc1.test-region.test,compartmentId:%s,nodepoolTags:ca-managed=true&namespace.foo=bar,min:1,max:5", autoDiscoveryCompartment)
+	nodeGroupAutoDiscovery, err := nodeGroupFromArg(nodeGroupArg)
+	if err != nil {
+		t.Errorf("Error: #{err}")
+	}
+	if nodeGroupAutoDiscovery.clusterId != "ocid1.cluster.oc1.test-region.test" {
+		t.Errorf("Error: clusterId should be ocid1.cluster.oc1.test-region.test")
+	}
+	if nodeGroupAutoDiscovery.compartmentId != "ocid1.compartment.oc1.test-region.test" {
+		t.Errorf("Error: compartmentId should be ocid1.compartment.oc1.test-region.test")
+	}
+	if nodeGroupAutoDiscovery.minSize != 1 {
+		t.Errorf("Error: minSize should be 1")
+	}
+	if nodeGroupAutoDiscovery.maxSize != 5 {
+		t.Errorf("Error: maxSize should be 5")
+	}
+	if nodeGroupAutoDiscovery.tags["ca-managed"] != "true" {
+		t.Errorf("Error: ca-managed:true is missing in tags.")
+	}
+	if nodeGroupAutoDiscovery.tags["namespace.foo"] != "bar" {
+		t.Errorf("Error: namespace.foo:bar is missing in tags.")
+	}
+}
+
+func TestValidateNodePoolTags(t *testing.T) {
+
+	testCases := map[string]struct {
+		nodeGroupTags  map[string]string
+		freeFormTags   map[string]string
+		definedTags    map[string]map[string]interface{}
+		expectedResult bool
+	}{
+		"no-tags": {
+			nodeGroupTags:  nil,
+			freeFormTags:   nil,
+			definedTags:    nil,
+			expectedResult: true,
+		},
+		"node-group tags provided but no tags on nodepool": {
+			nodeGroupTags: map[string]string{
+				"testTag": "testTagValue",
+			},
+			freeFormTags:   nil,
+			definedTags:    nil,
+			expectedResult: false,
+		},
+		"node-group tags and free-form tags do not match": {
+			nodeGroupTags: map[string]string{
+				"testTag": "testTagValue",
+			},
+			freeFormTags: map[string]string{
+				"foo": "bar",
+			},
+			definedTags:    nil,
+			expectedResult: false,
+		},
+		"free-form tags have required node-group tags": {
+			nodeGroupTags: map[string]string{
+				"testTag": "testTagValue",
+			},
+			freeFormTags: map[string]string{
+				"foo":     "bar",
+				"testTag": "testTagValue",
+			},
+			definedTags:    nil,
+			expectedResult: true,
+		},
+		"defined tags have required node-group tags": {
+			nodeGroupTags: map[string]string{
+				"ns.testTag": "testTagValue",
+			},
+			freeFormTags: nil,
+			definedTags: map[string]map[string]interface{}{
+				"ns": {
+					"testTag": "testTagValue",
+				},
+			},
+			expectedResult: true,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			result := validateNodepoolTags(tc.nodeGroupTags, tc.freeFormTags, tc.definedTags)
+			if result != tc.expectedResult {
+				t.Errorf("Testcase '%s' failed: got %t ; expected %t", name, result, tc.expectedResult)
+			}
+		})
 	}
 }

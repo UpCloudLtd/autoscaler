@@ -20,12 +20,12 @@ import (
 	"strings"
 	"testing"
 
-	core "k8s.io/api/core/v1"
+	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
+
 	resource_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func addVpaObservedContainersPatch(containerNames []string) resource_admission.PatchRecord {
@@ -38,7 +38,7 @@ func addVpaObservedContainersPatch(containerNames []string) resource_admission.P
 func TestCalculatePatches_ObservedContainers(t *testing.T) {
 	tests := []struct {
 		name          string
-		pod           *core.Pod
+		pod           *corev1.Pod
 		expectedPatch resource_admission.PatchRecord
 	}{
 		{

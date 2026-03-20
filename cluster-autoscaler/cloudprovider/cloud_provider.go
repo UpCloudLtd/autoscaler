@@ -23,8 +23,8 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
@@ -44,6 +44,8 @@ const (
 	CherryServersProviderName = "cherryservers"
 	// CloudStackProviderName gets the provider name of cloudstack
 	CloudStackProviderName = "cloudstack"
+	// CoreWeaveProviderName gets the provider name of coreweave
+	CoreWeaveProviderName = "coreweave"
 	// ClusterAPIProviderName gets the provider name of clusterapi
 	ClusterAPIProviderName = "clusterapi"
 	// DigitalOceanProviderName gets the provider name of digitalocean
@@ -90,16 +92,24 @@ const (
 	CivoProviderName = "civo"
 	// RancherProviderName gets the provider name of rancher
 	RancherProviderName = "rancher"
-
 	// UpCloudProviderName gets the provider name of upcloud
 	UpCloudProviderName = "upcloud"
+	// UthoProviderName gets the provider name of utho
+	UthoProviderName = "utho"
 )
 
 // GpuConfig contains the label, type and the resource name for a GPU.
 type GpuConfig struct {
-	Label        string
-	Type         string
-	ResourceName apiv1.ResourceName
+	Label                string
+	Type                 string
+	ExtendedResourceName apiv1.ResourceName
+	DraDriverName        string
+}
+
+// ExposedViaDra determines whether a GPU described in the config
+// is exposed via device plugin or DRA driver
+func (gpu *GpuConfig) ExposedViaDra() bool {
+	return gpu.DraDriverName != ""
 }
 
 // CloudProvider contains configuration info and functions for interacting with
@@ -186,20 +196,23 @@ type NodeGroup interface {
 	IncreaseSize(delta int) error
 
 	// AtomicIncreaseSize tries to increase the size of the node group atomically.
-	// - If the method returns nil, it guarantees that delta instances will be added to the node group
-	//   within its MaxNodeProvisionTime. The function should wait until node group size is updated.
-	//   The cloud provider is responsible for tracking and ensuring successful scale up asynchronously.
-	// - If the method returns an error, it guarantees that no new instances will be added to the node group
-	//   as a result of this call. The cloud provider is responsible for ensuring that before returning from the method.
-	// Implementation is optional. If implemented, CA will take advantage of the method while scaling up
-	// GenericScaleUp ProvisioningClass, guaranteeing that all instances required for such a ProvisioningRequest
-	// are provisioned atomically.
+	// It returns error if requesting the entire delta fails. The method doesn't wait until the new instances appear.
+	// Implementation is optional. Implementation of this method generally requires external cloud provider support
+	// for atomically requesting multiple instances. If implemented, CA will take advantage of the method while scaling up
+	// BestEffortAtomicScaleUp ProvisioningClass, guaranteeing that all instances required for such a
+	// ProvisioningRequest are provisioned atomically.
 	AtomicIncreaseSize(delta int) error
 
 	// DeleteNodes deletes nodes from this node group. Error is returned either on
 	// failure or if the given node doesn't belong to this node group. This function
 	// should wait until node group size is updated. Implementation required.
 	DeleteNodes([]*apiv1.Node) error
+
+	// ForceDeleteNodes deletes nodes from this node group, without checking for
+	// constraints like minimal size validation etc. Error is returned either on
+	// failure or if the given node doesn't belong to this node group. This function
+	// should wait until node group size is updated.
+	ForceDeleteNodes([]*apiv1.Node) error
 
 	// DecreaseTargetSize decreases the target size of the node group. This function
 	// doesn't permit to delete any existing node and can be used only to reduce the
@@ -220,13 +233,13 @@ type NodeGroup interface {
 	// This list should include also instances that might have not become a kubernetes node yet.
 	Nodes() ([]Instance, error)
 
-	// TemplateNodeInfo returns a schedulerframework.NodeInfo structure of an empty
+	// TemplateNodeInfo returns a framework.NodeInfo structure of an empty
 	// (as if just started) node. This will be used in scale-up simulations to
 	// predict what would a new node look like if a node group was expanded. The returned
 	// NodeInfo is expected to have a fully populated Node object, with all of the labels,
 	// capacity and allocatable information as well as all pods that are started on
 	// the node by default, using manifest (most likely only kube-proxy). Implementation optional.
-	TemplateNodeInfo() (*schedulerframework.NodeInfo, error)
+	TemplateNodeInfo() (*framework.NodeInfo, error)
 
 	// Exist checks if the node group really exists on the cloud provider side. Allows to tell the
 	// theoretical node group from the real one. Implementation required.
@@ -357,4 +370,13 @@ func ContainsCustomResources(resources []string) bool {
 		}
 	}
 	return false
+}
+
+// NodeGroupListToMapById returns a map of node group ID to nonode group
+func NodeGroupListToMapById(nodeGroups []NodeGroup) map[string]NodeGroup {
+	result := make(map[string]NodeGroup)
+	for _, nodeGroup := range nodeGroups {
+		result[nodeGroup.Id()] = nodeGroup
+	}
+	return result
 }

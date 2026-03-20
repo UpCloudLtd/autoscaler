@@ -18,14 +18,22 @@ limitations under the License.
 
 package v1beta1
 
-// PodSetApplyConfiguration represents an declarative configuration of the PodSet type for use
+// PodSetApplyConfiguration represents a declarative configuration of the PodSet type for use
 // with apply.
+//
+// PodSet represents one group of pods for Provisioning Request to provision capacity.
 type PodSetApplyConfiguration struct {
+	// PodTemplateRef is a reference to a PodTemplate object that is representing pods
+	// that will consume this reservation (must be within the same namespace).
+	// Users need to make sure that the  fields relevant to scheduler (e.g. node selector tolerations)
+	// are consistent between this template and actual pods consuming the Provisioning Request.
 	PodTemplateRef *ReferenceApplyConfiguration `json:"podTemplateRef,omitempty"`
-	Count          *int32                       `json:"count,omitempty"`
+	// Count contains the number of pods that will be created with a given
+	// template.
+	Count *int32 `json:"count,omitempty"`
 }
 
-// PodSetApplyConfiguration constructs an declarative configuration of the PodSet type for use with
+// PodSetApplyConfiguration constructs a declarative configuration of the PodSet type for use with
 // apply.
 func PodSet() *PodSetApplyConfiguration {
 	return &PodSetApplyConfiguration{}

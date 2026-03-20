@@ -21,19 +21,26 @@ import (
 	"testing"
 	"time"
 
-	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
-
-	apiv1 "k8s.io/api/core/v1"
+	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/stretchr/testify/assert"
+	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
 )
 
 const (
 	containerName = "container1"
+)
+
+var (
+	updateconfig = UpdateConfig{
+		MinChangePriority:          0.1,
+		PodLifetimeUpdateThreshold: time.Hour * 12,
+		EvictAfterOOMThreshold:     10 * time.Minute,
+	}
 )
 
 // TODO(bskiba): Refactor the SortPriority tests as a testcase list test.
@@ -51,16 +58,16 @@ func TestSortPriority(t *testing.T) {
 		"POD3": {ResourceDiff: 9.0},
 		"POD4": {ResourceDiff: 2.33},
 	})
-	calculator := NewUpdatePriorityCalculator(vpa, nil, &test.FakeRecommendationProcessor{}, priorityProcessor)
+	calculator := NewUpdatePriorityCalculator(vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
-	timestampNow := pod1.Status.StartTime.Time.Add(time.Hour * 24)
+	timestampNow := pod1.Status.StartTime.Add(time.Hour * 24)
 	calculator.AddPod(pod1, timestampNow)
 	calculator.AddPod(pod2, timestampNow)
 	calculator.AddPod(pod3, timestampNow)
 	calculator.AddPod(pod4, timestampNow)
 
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{pod3, pod1, pod4, pod2}, result, "Wrong priority order")
+	assert.Exactly(t, []*corev1.Pod{pod3, pod1, pod4, pod2}, result, "Wrong priority order")
 }
 
 func TestSortPriorityResourcesDecrease(t *testing.T) {
@@ -75,9 +82,9 @@ func TestSortPriorityResourcesDecrease(t *testing.T) {
 		"POD2": {ScaleUp: false, ResourceDiff: 0.25},
 		"POD3": {ScaleUp: false, ResourceDiff: 0.5},
 	})
-	calculator := NewUpdatePriorityCalculator(vpa, nil, &test.FakeRecommendationProcessor{}, priorityProcessor)
+	calculator := NewUpdatePriorityCalculator(vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
-	timestampNow := pod1.Status.StartTime.Time.Add(time.Hour * 24)
+	timestampNow := pod1.Status.StartTime.Add(time.Hour * 24)
 	calculator.AddPod(pod1, timestampNow)
 	calculator.AddPod(pod2, timestampNow)
 	calculator.AddPod(pod3, timestampNow)
@@ -87,7 +94,7 @@ func TestSortPriorityResourcesDecrease(t *testing.T) {
 	// 2. pod3 - can reclaim 5 units.
 	// 3. pod2 - can reclaim 3 units.
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{pod1, pod3, pod2}, result, "Wrong priority order")
+	assert.Exactly(t, []*corev1.Pod{pod1, pod3, pod2}, result, "Wrong priority order")
 }
 
 func TestUpdateNotRequired(t *testing.T) {
@@ -97,14 +104,14 @@ func TestUpdateNotRequired(t *testing.T) {
 	priorityProcessor := NewFakeProcessor(map[string]PodPriority{"POD1": {
 		ResourceDiff: 0.0,
 	}})
-	calculator := NewUpdatePriorityCalculator(vpa, nil, &test.FakeRecommendationProcessor{},
+	calculator := NewUpdatePriorityCalculator(vpa, updateconfig, &test.FakeRecommendationProcessor{},
 		priorityProcessor)
 
-	timestampNow := pod1.Status.StartTime.Time.Add(time.Hour * 24)
+	timestampNow := pod1.Status.StartTime.Add(time.Hour * 24)
 	calculator.AddPod(pod1, timestampNow)
 
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{}, result, "Pod should not be updated")
+	assert.Exactly(t, []*corev1.Pod{}, result, "Pod should not be updated")
 }
 
 // TODO: add expects to fake processor
@@ -120,13 +127,13 @@ func TestUseProcessor(t *testing.T) {
 		"POD1": {ResourceDiff: 0.0},
 	})
 	calculator := NewUpdatePriorityCalculator(
-		vpa, nil, recommendationProcessor, priorityProcessor)
+		vpa, updateconfig, recommendationProcessor, priorityProcessor)
 
-	timestampNow := pod1.Status.StartTime.Time.Add(time.Hour * 24)
+	timestampNow := pod1.Status.StartTime.Add(time.Hour * 24)
 	calculator.AddPod(pod1, timestampNow)
 
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{}, result, "Pod should not be updated")
+	assert.Exactly(t, []*corev1.Pod{}, result, "Pod should not be updated")
 }
 
 // Verify that a pod that lives for more than podLifetimeUpdateThreshold is
@@ -134,7 +141,7 @@ func TestUseProcessor(t *testing.T) {
 // 1. outside the [MinRecommended...MaxRecommended] range or
 // 2. diverging from the target by more than MinChangePriority.
 func TestUpdateLonglivedPods(t *testing.T) {
-	pods := []*apiv1.Pod{
+	pods := []*corev1.Pod{
 		test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get(),
 		test.Pod().WithName("POD2").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("1")).Get()).Get(),
 		test.Pod().WithName("POD3").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("8")).Get()).Get(),
@@ -153,22 +160,22 @@ func TestUpdateLonglivedPods(t *testing.T) {
 	})
 
 	calculator := NewUpdatePriorityCalculator(
-		vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+		vpa, UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 	// Pretend that the test pods started 13 hours ago.
-	timestampNow := pods[0].Status.StartTime.Time.Add(time.Hour * 13)
-	for i := 0; i < 3; i++ {
+	timestampNow := pods[0].Status.StartTime.Add(time.Hour * 13)
+	for i := range 3 {
 		calculator.AddPod(pods[i], timestampNow)
 	}
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{pods[1], pods[2]}, result, "Exactly POD2 and POD3 should be updated")
+	assert.Exactly(t, []*corev1.Pod{pods[1], pods[2]}, result, "Exactly POD2 and POD3 should be updated")
 }
 
 // Verify that a pod that lives for less than podLifetimeUpdateThreshold is
 // updated only if the request is outside the [MinRecommended...MaxRecommended]
 // range for at least one container.
 func TestUpdateShortlivedPods(t *testing.T) {
-	pods := []*apiv1.Pod{
+	pods := []*corev1.Pod{
 		test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get(),
 		test.Pod().WithName("POD2").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("1")).Get()).Get(),
 		test.Pod().WithName("POD3").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("10")).Get()).Get(),
@@ -186,28 +193,30 @@ func TestUpdateShortlivedPods(t *testing.T) {
 		"POD3": {OutsideRecommendedRange: true, ScaleUp: false, ResourceDiff: 0.9},
 	})
 
+	updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
+
 	calculator := NewUpdatePriorityCalculator(
-		vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+		vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 	// Pretend that the test pods started 11 hours ago.
-	timestampNow := pods[0].Status.StartTime.Time.Add(time.Hour * 11)
-	for i := 0; i < 3; i++ {
+	timestampNow := pods[0].Status.StartTime.Add(time.Hour * 11)
+	for i := range 3 {
 		calculator.AddPod(pods[i], timestampNow)
 	}
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{pods[2]}, result, "Only POD3 should be updated")
+	assert.Exactly(t, []*corev1.Pod{pods[2]}, result, "Only POD3 should be updated")
 }
 
 func TestUpdatePodWithQuickOOM(t *testing.T) {
 	pod := test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get()
 
 	// Pretend that the test pod started 11 hours ago.
-	timestampNow := pod.Status.StartTime.Time.Add(time.Hour * 11)
+	timestampNow := pod.Status.StartTime.Add(time.Hour * 11)
 
-	pod.Status.ContainerStatuses = []apiv1.ContainerStatus{
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 		{
-			LastTerminationState: apiv1.ContainerState{
-				Terminated: &apiv1.ContainerStateTerminated{
+			LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{
 					Reason:     "OOMKilled",
 					FinishedAt: metav1.NewTime(timestampNow.Add(-1 * 3 * time.Minute)),
 					StartedAt:  metav1.NewTime(timestampNow.Add(-1 * 5 * time.Minute)),
@@ -226,24 +235,26 @@ func TestUpdatePodWithQuickOOM(t *testing.T) {
 		"POD1": {ScaleUp: true, ResourceDiff: 0.25},
 	})
 
+	updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
+
 	calculator := NewUpdatePriorityCalculator(
-		vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+		vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 	calculator.AddPod(pod, timestampNow)
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{pod}, result, "Pod should be updated")
+	assert.Exactly(t, []*corev1.Pod{pod}, result, "Pod should be updated")
 }
 
 func TestDontUpdatePodWithQuickOOMNoResourceChange(t *testing.T) {
 	pod := test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).WithMemRequest(resource.MustParse("8Gi")).Get()).Get()
 
 	// Pretend that the test pod started 11 hours ago.
-	timestampNow := pod.Status.StartTime.Time.Add(time.Hour * 11)
+	timestampNow := pod.Status.StartTime.Add(time.Hour * 11)
 
-	pod.Status.ContainerStatuses = []apiv1.ContainerStatus{
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 		{
-			LastTerminationState: apiv1.ContainerState{
-				Terminated: &apiv1.ContainerStateTerminated{
+			LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{
 					Reason:     "OOMKilled",
 					FinishedAt: metav1.NewTime(timestampNow.Add(-1 * 3 * time.Minute)),
 					StartedAt:  metav1.NewTime(timestampNow.Add(-1 * 5 * time.Minute)),
@@ -262,24 +273,26 @@ func TestDontUpdatePodWithQuickOOMNoResourceChange(t *testing.T) {
 		"POD1": {ScaleUp: true, ResourceDiff: 0.0},
 	})
 
+	updateconfig := UpdateConfig{MinChangePriority: 0.1, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
+
 	calculator := NewUpdatePriorityCalculator(
-		vpa, &UpdateConfig{MinChangePriority: 0.1}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+		vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 	calculator.AddPod(pod, timestampNow)
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{}, result, "Pod should not be updated")
+	assert.Exactly(t, []*corev1.Pod{}, result, "Pod should not be updated")
 }
 
 func TestDontUpdatePodWithOOMAfterLongRun(t *testing.T) {
 	pod := test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get()
 
 	// Pretend that the test pod started 11 hours ago.
-	timestampNow := pod.Status.StartTime.Time.Add(time.Hour * 11)
+	timestampNow := pod.Status.StartTime.Add(time.Hour * 11)
 
-	pod.Status.ContainerStatuses = []apiv1.ContainerStatus{
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 		{
-			LastTerminationState: apiv1.ContainerState{
-				Terminated: &apiv1.ContainerStateTerminated{
+			LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{
 					Reason:     "OOMKilled",
 					FinishedAt: metav1.NewTime(timestampNow.Add(-1 * 3 * time.Minute)),
 					StartedAt:  metav1.NewTime(timestampNow.Add(-1 * 60 * time.Minute)),
@@ -297,12 +310,13 @@ func TestDontUpdatePodWithOOMAfterLongRun(t *testing.T) {
 	priorityProcessor := NewFakeProcessor(map[string]PodPriority{
 		"POD1": {ScaleUp: true, ResourceDiff: 0.0},
 	})
+	updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
 	calculator := NewUpdatePriorityCalculator(
-		vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+		vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 	calculator.AddPod(pod, timestampNow)
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{}, result, "Pod shouldn't be updated")
+	assert.Exactly(t, []*corev1.Pod{}, result, "Pod shouldn't be updated")
 }
 
 func TestQuickOOM_VpaOvservedContainers(t *testing.T) {
@@ -335,13 +349,13 @@ func TestQuickOOM_VpaOvservedContainers(t *testing.T) {
 				WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get()
 
 			// Pretend that the test pod started 11 hours ago.
-			timestampNow := pod.Status.StartTime.Time.Add(time.Hour * 11)
+			timestampNow := pod.Status.StartTime.Add(time.Hour * 11)
 
-			pod.Status.ContainerStatuses = []apiv1.ContainerStatus{
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 				{
 					Name: containerName,
-					LastTerminationState: apiv1.ContainerState{
-						Terminated: &apiv1.ContainerStateTerminated{
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
 							Reason:     "OOMKilled",
 							FinishedAt: metav1.NewTime(timestampNow.Add(-1 * 3 * time.Minute)),
 							StartedAt:  metav1.NewTime(timestampNow.Add(-1 * 5 * time.Minute)),
@@ -358,8 +372,9 @@ func TestQuickOOM_VpaOvservedContainers(t *testing.T) {
 
 			priorityProcessor := NewFakeProcessor(map[string]PodPriority{
 				"POD1": {ScaleUp: true, ResourceDiff: 0.25}})
+			updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
 			calculator := NewUpdatePriorityCalculator(
-				vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+				vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 			calculator.AddPod(pod, timestampNow)
 			result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
@@ -420,13 +435,13 @@ func TestQuickOOM_ContainerResourcePolicy(t *testing.T) {
 				WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get()
 
 			// Pretend that the test pod started 11 hours ago.
-			timestampNow := pod.Status.StartTime.Time.Add(time.Hour * 11)
+			timestampNow := pod.Status.StartTime.Add(time.Hour * 11)
 
-			pod.Status.ContainerStatuses = []apiv1.ContainerStatus{
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 				{
 					Name: containerName,
-					LastTerminationState: apiv1.ContainerState{
-						Terminated: &apiv1.ContainerStateTerminated{
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
 							Reason:     "OOMKilled",
 							FinishedAt: metav1.NewTime(timestampNow.Add(-1 * 3 * time.Minute)),
 							StartedAt:  metav1.NewTime(timestampNow.Add(-1 * 5 * time.Minute)),
@@ -448,8 +463,9 @@ func TestQuickOOM_ContainerResourcePolicy(t *testing.T) {
 			}
 			priorityProcessor := NewFakeProcessor(map[string]PodPriority{
 				"POD1": {ScaleUp: true, ResourceDiff: 0.25}})
+			updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
 			calculator := NewUpdatePriorityCalculator(
-				vpa, &UpdateConfig{MinChangePriority: 0.5}, &test.FakeRecommendationProcessor{}, priorityProcessor)
+				vpa, updateconfig, &test.FakeRecommendationProcessor{}, priorityProcessor)
 
 			calculator.AddPod(pod, timestampNow)
 			result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
@@ -460,22 +476,22 @@ func TestQuickOOM_ContainerResourcePolicy(t *testing.T) {
 }
 
 func TestNoPods(t *testing.T) {
-	calculator := NewUpdatePriorityCalculator(nil, nil, &test.FakeRecommendationProcessor{},
+	updateconfig := UpdateConfig{MinChangePriority: 0.5, PodLifetimeUpdateThreshold: time.Hour * 12, EvictAfterOOMThreshold: 10 * time.Minute}
+	calculator := NewUpdatePriorityCalculator(nil, updateconfig, &test.FakeRecommendationProcessor{},
 		NewFakeProcessor(map[string]PodPriority{}))
 	result := calculator.GetSortedPods(NewDefaultPodEvictionAdmission())
-	assert.Exactly(t, []*apiv1.Pod{}, result)
+	assert.Exactly(t, []*corev1.Pod{}, result)
 }
 
 type pod1Admission struct{}
 
-func (p *pod1Admission) LoopInit([]*apiv1.Pod, map[*vpa_types.VerticalPodAutoscaler][]*apiv1.Pod) {}
-func (p *pod1Admission) Admit(pod *apiv1.Pod, recommendation *vpa_types.RecommendedPodResources) bool {
+func (p *pod1Admission) LoopInit([]*corev1.Pod, map[*vpa_types.VerticalPodAutoscaler][]*corev1.Pod) {}
+func (p *pod1Admission) Admit(pod *corev1.Pod, recommendation *vpa_types.RecommendedPodResources) bool {
 	return pod.Name == "POD1"
 }
 func (p *pod1Admission) CleanUp() {}
 
 func TestAdmission(t *testing.T) {
-
 	pod1 := test.Pod().WithName("POD1").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("2")).Get()).Get()
 	pod2 := test.Pod().WithName("POD2").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("4")).Get()).Get()
 	pod3 := test.Pod().WithName("POD3").AddContainer(test.Container().WithName(containerName).WithCPURequest(resource.MustParse("1")).Get()).Get()
@@ -488,17 +504,17 @@ func TestAdmission(t *testing.T) {
 		"POD2": {ScaleUp: true, ResourceDiff: 1.5},
 		"POD3": {ScaleUp: true, ResourceDiff: 9.0},
 		"POD4": {ScaleUp: true, ResourceDiff: 2.33}})
-	calculator := NewUpdatePriorityCalculator(vpa, nil,
+	calculator := NewUpdatePriorityCalculator(vpa, updateconfig,
 		&test.FakeRecommendationProcessor{}, priorityProcessor)
 
-	timestampNow := pod1.Status.StartTime.Time.Add(time.Hour * 24)
+	timestampNow := pod1.Status.StartTime.Add(time.Hour * 24)
 	calculator.AddPod(pod1, timestampNow)
 	calculator.AddPod(pod2, timestampNow)
 	calculator.AddPod(pod3, timestampNow)
 	calculator.AddPod(pod4, timestampNow)
 
 	result := calculator.GetSortedPods(&pod1Admission{})
-	assert.Exactly(t, []*apiv1.Pod{pod1}, result, "Wrong priority order")
+	assert.Exactly(t, []*corev1.Pod{pod1}, result, "Wrong priority order")
 }
 
 func TestLessPodPriority(t *testing.T) {
@@ -553,7 +569,6 @@ func TestLessPodPriority(t *testing.T) {
 			assert.Equal(t, !tc.isLess, tc.other.Less(tc.prio))
 		})
 	}
-
 }
 
 func TestAddPodLogs(t *testing.T) {
@@ -565,17 +580,60 @@ func TestAddPodLogs(t *testing.T) {
 		{
 			name:        "container with target and uncappedTarget",
 			givenRec:    test.Recommendation().WithContainer(containerName).WithTarget("4", "10M").Get(),
-			expectedLog: "container1: target: 10000k 4000m; uncappedTarget: 10000k 4000m;\n",
+			expectedLog: "container1: target: 10000k 4000m; uncappedTarget: 10000k 4000m;",
 		},
 		{
 			name:        "container with cpu only",
 			givenRec:    test.Recommendation().WithContainer(containerName).WithTarget("8", "").Get(),
-			expectedLog: "container1: target: 8000m; uncappedTarget: 8000m;\n",
+			expectedLog: "container1: target: 8000m; uncappedTarget: 8000m;",
 		},
 		{
 			name:        "container with memory only",
 			givenRec:    test.Recommendation().WithContainer(containerName).WithTarget("", "10M").Get(),
-			expectedLog: "container1: target: 10000k uncappedTarget: 10000k \n",
+			expectedLog: "container1: target: 10000k uncappedTarget: 10000k ",
+		},
+		{
+			name: "multi-container with different resources",
+			givenRec: &vpa_types.RecommendedPodResources{
+				ContainerRecommendations: []vpa_types.RecommendedContainerResources{
+					{
+						ContainerName: "container-1",
+						Target:        test.Resources("4", "10M"),
+					},
+					{
+						ContainerName: "container-2",
+						Target:        test.Resources("8", ""),
+					},
+					{
+						ContainerName: "container-3",
+						Target:        test.Resources("", "10m"),
+					},
+				},
+			},
+			expectedLog: "container-1: target: 10000k 4000m; container-2: target: 8000m; container-3: target: 1k ",
+		},
+		{
+			name: "multi-containers with uncappedTarget",
+			givenRec: &vpa_types.RecommendedPodResources{
+				ContainerRecommendations: []vpa_types.RecommendedContainerResources{
+					{
+						ContainerName:  "container-1",
+						Target:         test.Resources("4", "10M"),
+						UncappedTarget: test.Resources("4", "10M"),
+					},
+					{
+						ContainerName:  "container-2",
+						Target:         test.Resources("8", ""),
+						UncappedTarget: test.Resources("8", ""),
+					},
+					{
+						ContainerName:  "container-3",
+						Target:         test.Resources("", "10m"),
+						UncappedTarget: test.Resources("", "10m"),
+					},
+				},
+			},
+			expectedLog: "container-1: target: 10000k 4000m; uncappedTarget: 10000k 4000m;container-2: target: 8000m; uncappedTarget: 8000m;container-3: target: 1k uncappedTarget: 1k ",
 		},
 	}
 	for _, tc := range testCases {
@@ -583,7 +641,7 @@ func TestAddPodLogs(t *testing.T) {
 			vpa := test.VerticalPodAutoscaler().WithContainer(containerName).WithTarget("10", "").Get()
 			priorityProcessor := NewFakeProcessor(map[string]PodPriority{
 				"POD1": {ScaleUp: true, ResourceDiff: 4.0}})
-			calculator := NewUpdatePriorityCalculator(vpa, nil,
+			calculator := NewUpdatePriorityCalculator(vpa, updateconfig,
 				&test.FakeRecommendationProcessor{}, priorityProcessor)
 
 			actualLog := calculator.GetProcessedRecommendationTargets(tc.givenRec)

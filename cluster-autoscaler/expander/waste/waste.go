@@ -20,8 +20,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	podutils "k8s.io/autoscaler/cluster-autoscaler/utils/pod"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 type leastwaste struct {
@@ -33,7 +34,7 @@ func NewFilter() expander.Filter {
 }
 
 // BestOption Finds the option that wastes the least fraction of CPU and Memory
-func (l *leastwaste) BestOptions(expansionOptions []expander.Option, nodeInfo map[string]*schedulerframework.NodeInfo) []expander.Option {
+func (l *leastwaste) BestOptions(expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo) []expander.Option {
 	var leastWastedScore float64
 	var leastWastedOptions []expander.Option
 
@@ -73,14 +74,9 @@ func (l *leastwaste) BestOptions(expansionOptions []expander.Option, nodeInfo ma
 
 func resourcesForPods(pods []*apiv1.Pod) (cpu resource.Quantity, memory resource.Quantity) {
 	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
-			if request, ok := container.Resources.Requests[apiv1.ResourceCPU]; ok {
-				cpu.Add(request)
-			}
-			if request, ok := container.Resources.Requests[apiv1.ResourceMemory]; ok {
-				memory.Add(request)
-			}
-		}
+		podRequests := podutils.PodRequests(pod)
+		cpu.Add(podRequests[apiv1.ResourceCPU])
+		memory.Add(podRequests[apiv1.ResourceMemory])
 	}
 
 	return cpu, memory

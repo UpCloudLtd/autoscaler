@@ -26,10 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
@@ -82,9 +83,20 @@ func (gce *GceCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
 }
 
 // GetNodeGpuConfig returns the label, type and resource name for the GPU added to node. If node doesn't have
-// any GPUs, it returns nil.
+// any GPUs, it returns nil. If node has GPU attached using DRA - populates the according field in GpuConfig
 func (gce *GceCloudProvider) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider.GpuConfig {
-	return gpu.GetNodeGPUFromCloudProvider(gce, node)
+	gpuConfig := gpu.GetNodeGPUFromCloudProvider(gce, node)
+
+	// If GPU devices are exposed using DRA - extended resource
+	// won't be present in the node alloctable or capacity
+	// so we overwrite extended resource name as it won't ever
+	// be there
+	if GpuDraDriverEnabled(node) {
+		gpuConfig.DraDriverName = DraGPUDriver
+		gpuConfig.ExtendedResourceName = ""
+	}
+
+	return gpuConfig
 }
 
 // NodeGroups returns all node groups configured for this cloud provider.
@@ -292,6 +304,11 @@ func (mig *gceMig) DeleteNodes(nodes []*apiv1.Node) error {
 	if int(size) <= mig.MinSize() {
 		return fmt.Errorf("min size reached, nodes will not be deleted")
 	}
+	return mig.ForceDeleteNodes(nodes)
+}
+
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (mig *gceMig) ForceDeleteNodes(nodes []*apiv1.Node) error {
 	refs := make([]GceRef, 0, len(nodes))
 	for _, node := range nodes {
 
@@ -361,18 +378,17 @@ func (mig *gceMig) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*con
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (mig *gceMig) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (mig *gceMig) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	node, err := mig.gceManager.GetMigTemplateNode(mig)
 	if err != nil {
 		return nil, err
 	}
-	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(mig.Id()))
-	nodeInfo.SetNode(node)
+	nodeInfo := framework.NewNodeInfo(node, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(mig.Id())})
 	return nodeInfo, nil
 }
 
 // BuildGCE builds GCE cloud provider, manager etc.
-func BuildGCE(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+func BuildGCE(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	var config io.ReadCloser
 	if opts.CloudConfig != "" {
 		var err error

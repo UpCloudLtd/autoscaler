@@ -27,10 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	klog "k8s.io/klog/v2"
-	schedulerframework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
@@ -49,6 +50,7 @@ var (
 		"nvidia-tesla-a100": {},
 		"nvidia-a10g":       {},
 		"nvidia-l4":         {},
+		"nvidia-l40s":       {},
 	}
 )
 
@@ -116,7 +118,9 @@ func (aws *awsCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.N
 	}
 	ref, err := AwsRefFromProviderId(node.Spec.ProviderID)
 	if err != nil {
-		return nil, err
+		// Dropping this into V as it will be noisy with many Hybrid Nodes
+		klog.V(6).Infof("Node %v has unrecognized providerId: %v", node.Name, node.Spec.ProviderID)
+		return nil, nil
 	}
 	asg := aws.awsManager.GetAsgForInstance(*ref)
 
@@ -348,6 +352,11 @@ func (ng *AwsNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 	return ng.awsManager.DeleteInstances(refs)
 }
 
+// ForceDeleteNodes deletes nodes from the group regardless of constraints.
+func (ng *AwsNodeGroup) ForceDeleteNodes(nodes []*apiv1.Node) error {
+	return cloudprovider.ErrNotImplemented
+}
+
 // Id returns asg id.
 func (ng *AwsNodeGroup) Id() string {
 	return ng.asg.Name
@@ -391,7 +400,7 @@ func (ng *AwsNodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (ng *AwsNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error) {
+func (ng *AwsNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 	template, err := ng.awsManager.getAsgTemplate(ng.asg)
 	if err != nil {
 		return nil, err
@@ -402,13 +411,12 @@ func (ng *AwsNodeGroup) TemplateNodeInfo() (*schedulerframework.NodeInfo, error)
 		return nil, err
 	}
 
-	nodeInfo := schedulerframework.NewNodeInfo(cloudprovider.BuildKubeProxy(ng.asg.Name))
-	nodeInfo.SetNode(node)
+	nodeInfo := framework.NewNodeInfo(node, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(ng.asg.Name)})
 	return nodeInfo, nil
 }
 
 // BuildAWS builds AWS cloud provider, manager etc.
-func BuildAWS(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+func BuildAWS(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	var cfg io.ReadCloser
 	if opts.CloudConfig != "" {
 		var err error
@@ -429,7 +437,7 @@ func BuildAWS(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscover
 	if opts.AWSUseStaticInstanceList {
 		klog.Warningf("Using static EC2 Instance Types, this list could be outdated. Last update time: %s", lastUpdateTime)
 	} else {
-		generatedInstanceTypes, err := GenerateEC2InstanceTypes(sdkProvider.session)
+		generatedInstanceTypes, err := GenerateEC2InstanceTypes(sdkProvider.cfg)
 		if err != nil {
 			klog.Errorf("Failed to generate AWS EC2 Instance Types: %v, falling back to static list with last update time: %s", err, lastUpdateTime)
 		}

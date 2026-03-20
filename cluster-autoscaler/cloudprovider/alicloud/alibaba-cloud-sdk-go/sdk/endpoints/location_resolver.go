@@ -18,9 +18,11 @@ package endpoints
 
 import (
 	"encoding/json"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud/alibaba-cloud-sdk-go/sdk/requests"
 	"sync"
 	"time"
+
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/alicloud/alibaba-cloud-sdk-go/sdk/requests"
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -75,13 +77,26 @@ func (resolver *LocationResolver) TryResolve(param *ResolveParam) (endpoint stri
 	}
 
 	response, err := param.CommonApi(getEndpointRequest)
+	if err != nil {
+		klog.Errorf("failed to resolve endpoint, error: %v", err)
+		support = false
+		return
+	}
+
 	var getEndpointResponse GetEndpointResponse
 	if !response.IsSuccess() {
 		support = false
 		return
 	}
 
-	json.Unmarshal([]byte(response.GetHttpContentString()), &getEndpointResponse)
+	content := response.GetHttpContentString()
+	err = json.Unmarshal([]byte(content), &getEndpointResponse)
+	if err != nil {
+		klog.Errorf("failed to resolve endpoint, error: %v, response: %s", err, content)
+		support = false
+		return
+	}
+
 	if !getEndpointResponse.Success || getEndpointResponse.Endpoints == nil {
 		support = false
 		return
@@ -139,7 +154,7 @@ type EndpointsObj struct {
 
 // EndpointObj wrapper endpoint
 type EndpointObj struct {
-	Protocols   map[string]string
+	Protocols   json.RawMessage
 	Type        string
 	Namespace   string
 	Id          string

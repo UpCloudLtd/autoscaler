@@ -13,6 +13,8 @@ spec:
     metadata:
       labels:
         app: vpa-recommender
+        app.kubernetes.io/component: recommender
+        app.kubernetes.io/name: vertical-pod-autoscaler
     spec:
       serviceAccountName: vpa-recommender
       securityContext:
@@ -20,8 +22,8 @@ spec:
         runAsUser: 65534 # nobody
       containers:
       - name: recommender
-        image: registry.k8s.io/autoscaling/vpa-recommender:1.2.0
-        imagePullPolicy: Always
+        image: registry.k8s.io/autoscaling/vpa-recommender:1.6.0
+        imagePullPolicy: IfNotPresent
         resources:
           limits:
             cpu: 200m
@@ -32,3 +34,18 @@ spec:
         ports:
         - name: prometheus
           containerPort: 8942
+        livenessProbe:
+          httpGet:
+            path: /health-check
+            port: prometheus
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health-check
+            port: prometheus
+            scheme: HTTP
+          periodSeconds: 10
+          failureThreshold: 3

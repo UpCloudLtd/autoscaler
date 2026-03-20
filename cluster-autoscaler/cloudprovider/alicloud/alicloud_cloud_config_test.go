@@ -17,8 +17,9 @@ limitations under the License.
 package alicloud
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAccessKeyCloudConfigIsValid(t *testing.T) {
@@ -36,6 +37,18 @@ func TestRRSACloudConfigIsValid(t *testing.T) {
 	t.Setenv(oidcTokenFilePath, "/var/run/secrets/tokens/oidc-token")
 	t.Setenv(roleARN, "acs:ram::12345:role/autoscaler-role")
 	t.Setenv(roleSessionName, "session")
+	t.Setenv(regionId, "cn-hangzhou")
+
+	cfg := &cloudConfig{}
+	assert.True(t, cfg.isValid())
+	assert.True(t, cfg.RRSAEnabled)
+}
+
+func TestOldRRSACloudConfigIsValid(t *testing.T) {
+	t.Setenv(oldOidcProviderARN, "acs:ram::12345:oidc-provider/ack-rrsa-cb123")
+	t.Setenv(oldOidcTokenFilePath, "/var/run/secrets/tokens/oidc-token")
+	t.Setenv(oldRoleARN, "acs:ram::12345:role/autoscaler-role")
+	t.Setenv(oldRoleSessionName, "session")
 	t.Setenv(regionId, "cn-hangzhou")
 
 	cfg := &cloudConfig{}

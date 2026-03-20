@@ -200,6 +200,18 @@ func TestErrors(t *testing.T) {
 		},
 		{
 			errorCodes:         []string{"CONDITION_NOT_MET"},
+			errorMessage:       "Specified reservation 'rsv-name' does not exist.",
+			expectedErrorCode:  "RESERVATION_NOT_FOUND",
+			expectedErrorClass: cloudprovider.OtherErrorClass,
+		},
+		{
+			errorCodes:         []string{"CONDITION_NOT_MET"},
+			errorMessage:       "Specified reservations [this-reservation-does-not-exist] do not exist. (when acting as",
+			expectedErrorCode:  "RESERVATION_NOT_FOUND",
+			expectedErrorClass: cloudprovider.OtherErrorClass,
+		},
+		{
+			errorCodes:         []string{"CONDITION_NOT_MET"},
 			errorMessage:       "Cannot insert instance to a reservation with status: CREATING, as it requires reservation to be in READY state.",
 			expectedErrorCode:  "RESERVATION_NOT_READY",
 			expectedErrorClass: cloudprovider.OtherErrorClass,
@@ -207,6 +219,24 @@ func TestErrors(t *testing.T) {
 		{
 			errorCodes:         []string{"xyz", "abc"},
 			expectedErrorCode:  "OTHER",
+			expectedErrorClass: cloudprovider.OtherErrorClass,
+		},
+		{
+			errorCodes:         []string{"CONDITION_NOT_MET"},
+			errorMessage:       "Specified reservation 'rsv-name' does not have available resources for the request.",
+			expectedErrorCode:  "RESERVATION_CAPACITY_EXCEEDED",
+			expectedErrorClass: cloudprovider.OtherErrorClass,
+		},
+		{
+			errorCodes:         []string{"CONDITION_NOT_MET"},
+			errorMessage:       "No available resources in specified reservations 'rsv-name'",
+			expectedErrorCode:  "RESERVATION_INCOMPATIBLE",
+			expectedErrorClass: cloudprovider.OtherErrorClass,
+		},
+		{
+			errorCodes:         []string{"CONDITION_NOT_MET"},
+			errorMessage:       "Unsupported TPU configuration",
+			expectedErrorCode:  ErrorUnsupportedTpuConfiguration,
 			expectedErrorClass: cloudprovider.OtherErrorClass,
 		},
 	}
@@ -273,6 +303,7 @@ func TestFetchMigInstancesInstanceUrlHandling(t *testing.T) {
 						Version: &gce_api.ManagedInstanceVersion{
 							InstanceTemplate: fmt.Sprintf(instanceTemplateUrlTempl, 2),
 						},
+						InstanceStatus: "PROVISIONING",
 					},
 					{
 						Id:            42,
@@ -284,6 +315,7 @@ func TestFetchMigInstancesInstanceUrlHandling(t *testing.T) {
 						Version: &gce_api.ManagedInstanceVersion{
 							InstanceTemplate: fmt.Sprintf(instanceTemplateUrlTempl, 42),
 						},
+						InstanceStatus: "PROVISIONING",
 					},
 				},
 			},
@@ -295,6 +327,7 @@ func TestFetchMigInstancesInstanceUrlHandling(t *testing.T) {
 					},
 					NumericId:            2,
 					InstanceTemplateName: fmt.Sprintf(instanceTemplateNameTempl, 2),
+					GCEStatus:            "PROVISIONING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -303,6 +336,7 @@ func TestFetchMigInstancesInstanceUrlHandling(t *testing.T) {
 					},
 					NumericId:            42,
 					InstanceTemplateName: fmt.Sprintf(instanceTemplateNameTempl, 42),
+					GCEStatus:            "PROVISIONING",
 				},
 			},
 		},
@@ -623,18 +657,13 @@ func TestFetchAvailableDiskTypes(t *testing.T) {
 	defer server.Close()
 	g := newTestAutoscalingGceClient(t, "project-id", server.URL, "")
 
-	// ref: https://cloud.google.com/compute/docs/reference/rest/v1/diskTypes/aggregatedList
-	getDiskTypesAggregatedListOKResponse, _ := os.ReadFile("fixtures/diskTypes_aggregatedList.json")
-	server.On("handle", "/projects/project-id/aggregated/diskTypes").Return(string(getDiskTypesAggregatedListOKResponse)).Times(1)
+	// ref: https://cloud.google.com/compute/docs/reference/rest/v1/diskTypes/list
+	getDiskTypesListOKResponse, _ := os.ReadFile("fixtures/diskTypes_list.json")
+	server.On("handle", "/projects/project-id/zones/us-central1-b/diskTypes").Return(string(getDiskTypesListOKResponse)).Times(1)
 
 	t.Run("correctly parse a response", func(t *testing.T) {
-		want := map[string][]string{
-			// "us-central1" region should be skipped
-			"us-central1-a": {"local-ssd", "pd-balanced", "pd-ssd", "pd-standard"},
-			"us-central1-b": {"hyperdisk-balanced", "hyperdisk-extreme", "hyperdisk-throughput", "local-ssd", "pd-balanced", "pd-extreme", "pd-ssd", "pd-standard"},
-		}
-
-		got, err := g.FetchAvailableDiskTypes()
+		want := []string{"hyperdisk-balanced", "hyperdisk-extreme", "hyperdisk-throughput", "local-ssd", "pd-balanced", "pd-extreme", "pd-ssd", "pd-standard"}
+		got, err := g.FetchAvailableDiskTypes("us-central1-b")
 
 		assert.NoError(t, err)
 		if diff := cmp.Diff(want, got, cmpopts.EquateErrors()); diff != "" {
@@ -830,7 +859,7 @@ func TestAutoscalingClientTimeouts(t *testing.T) {
 		},
 		"FetchAvailableDiskTypes_HttpClientTimeout": {
 			clientFunc: func(client *autoscalingGceClientV1) error {
-				_, err := client.FetchAvailableDiskTypes()
+				_, err := client.FetchAvailableDiskTypes("")
 				return err
 			},
 			httpTimeout: instantTimeout,
@@ -918,6 +947,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 10,
 					Igm:       GceRef{},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -926,6 +956,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 11,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "PROVISIONING",
 				},
 			},
 		},
@@ -951,6 +982,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 10,
 					Igm:       GceRef{},
+					GCEStatus: "STOPPING",
 				},
 			},
 		},
@@ -988,6 +1020,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 10,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -996,6 +1029,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 11,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 			},
 		},
@@ -1085,6 +1119,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 10,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -1093,6 +1128,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 11,
 					Igm:       GceRef{"myprojid", "zones", "test-igm2-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -1101,6 +1137,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 12,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -1109,6 +1146,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 13,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -1117,6 +1155,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 14,
 					Igm:       GceRef{"myprojid", "zones", "test-igm2-grp"},
+					GCEStatus: "RUNNING",
 				},
 				{
 					Instance: cloudprovider.Instance{
@@ -1125,6 +1164,7 @@ func TestFetchAllInstances(t *testing.T) {
 					},
 					NumericId: 15,
 					Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+					GCEStatus: "RUNNING",
 				},
 			},
 		},
@@ -1181,6 +1221,7 @@ func TestExternalToInternalInstance(t *testing.T) {
 				},
 				NumericId: 10,
 				Igm:       GceRef{},
+				GCEStatus: "RUNNING",
 			},
 		},
 		{
@@ -1229,6 +1270,29 @@ func TestExternalToInternalInstance(t *testing.T) {
 				},
 				NumericId: 10,
 				Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+				GCEStatus: "RUNNING",
+			},
+		},
+		{
+			name: "suspended instance",
+			instance: &gce_api.Instance{
+				Id: 10,
+				Metadata: &gce_api.Metadata{
+					Items: []*gce_api.MetadataItems{
+						{Key: "created-by", Value: &igm1},
+					},
+				},
+				SelfLink: "https://www.googleapis.com/compute/v1/projects/myprojid/zones/myzone/instances/test-instance-1",
+				Status:   "SUSPENDED",
+			},
+			want: GceInstance{
+				Instance: cloudprovider.Instance{
+					Id:     "gce://myprojid/myzone/test-instance-1",
+					Status: &cloudprovider.InstanceStatus{State: cloudprovider.InstanceRunning},
+				},
+				NumericId: 10,
+				Igm:       GceRef{"myprojid", "zones", "test-igm1-grp"},
+				GCEStatus: "SUSPENDED",
 			},
 		},
 	}
@@ -1241,6 +1305,51 @@ func TestExternalToInternalInstance(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFetchMigTargetSize(t *testing.T) {
+	mig := GceRef{
+		Project: "project1",
+		Zone:    "us-central1-b",
+		Name:    "mig-1",
+	}
+
+	testCases := []struct {
+		name     string
+		response gce_api.InstanceGroupManager
+		wantSize int64
+	}{
+		{
+			name: "MIG returns correct target size",
+			response: gce_api.InstanceGroupManager{
+				Name:       "mig-1",
+				TargetSize: 42,
+			},
+			wantSize: 42,
+		},
+		{
+			name: "MIG returns correct target size with suspended instances",
+			response: gce_api.InstanceGroupManager{
+				Name:                "mig-1",
+				TargetSize:          42,
+				TargetSuspendedSize: 3,
+			},
+			wantSize: 45,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+			gceClient := newTestAutoscalingGceClient(t, "project1", server.URL, "")
+			b, _ := json.Marshal(tc.response)
+			server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/mig-1").Return(string(b)).Once()
+			size, err := gceClient.FetchMigTargetSize(mig)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantSize, size)
+			mock.AssertExpectationsForObjects(t, server)
 		})
 	}
 }

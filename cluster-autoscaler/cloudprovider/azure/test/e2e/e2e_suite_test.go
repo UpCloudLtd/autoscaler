@@ -1,3 +1,5 @@
+//go:build e2e
+
 /*
 Copyright 2024 The Kubernetes Authors.
 
@@ -147,7 +149,7 @@ func ensureHelmValues(values map[string]interface{}) {
 		GinkgoLogr.Info(fmt.Sprintf(format, v...))
 	})).To(Succeed())
 
-	chart, err := loader.Load("../../../../../charts/cluster-autoscaler")
+	chart, err := loader.Load("../../../../charts/cluster-autoscaler")
 	Expect(err).NotTo(HaveOccurred())
 
 	get := action.NewGet(helmCfg)

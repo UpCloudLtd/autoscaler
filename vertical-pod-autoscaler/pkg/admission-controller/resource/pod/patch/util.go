@@ -19,6 +19,9 @@ package patch
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	resource_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 )
 
@@ -37,5 +40,40 @@ func GetAddAnnotationPatch(annotationName, annotationValue string) resource_admi
 		Op:    "add",
 		Path:  fmt.Sprintf("/metadata/annotations/%s", annotationName),
 		Value: annotationValue,
+	}
+}
+
+// GetRemoveAnnotationPatch returns a patch to remove an annotation.
+func GetRemoveAnnotationPatch(annotationName string) resource_admission.PatchRecord {
+	return resource_admission.PatchRecord{
+		Op:   "remove",
+		Path: fmt.Sprintf("/metadata/annotations/%s", annotationName),
+	}
+}
+
+// GetAddResourceRequirementValuePatch returns a patch record to add resource requirements to a container.
+func GetAddResourceRequirementValuePatch(i int, kind string, resource corev1.ResourceName, quantity resource.Quantity) resource_admission.PatchRecord {
+	return resource_admission.PatchRecord{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/%s/%s", i, kind, resource),
+		Value: quantity.String()}
+}
+
+// GetPatchInitializingEmptyResources returns a patch record to initialize an empty resources object for a container.
+func GetPatchInitializingEmptyResources(i int) resource_admission.PatchRecord {
+	return resource_admission.PatchRecord{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources", i),
+		Value: corev1.ResourceRequirements{},
+	}
+}
+
+// GetPatchInitializingEmptyResourcesSubfield returns a patch record to initialize an empty subfield
+// (e.g., "requests" or "limits") within a container's resources object.
+func GetPatchInitializingEmptyResourcesSubfield(i int, kind string) resource_admission.PatchRecord {
+	return resource_admission.PatchRecord{
+		Op:    "add",
+		Path:  fmt.Sprintf("/spec/containers/%d/resources/%s", i, kind),
+		Value: corev1.ResourceList{},
 	}
 }

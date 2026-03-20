@@ -24,6 +24,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
+	podutils "k8s.io/autoscaler/cluster-autoscaler/utils/pod"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 
 	klog "k8s.io/klog/v2"
@@ -94,7 +95,7 @@ func (model *GcePriceModel) NodePrice(node *apiv1.Node, startTime time.Time, end
 	// Boot disk price
 	bootDiskSize, _ := strconv.ParseInt(node.Annotations[BootDiskSizeAnnotation], 10, 64)
 	if bootDiskSize == 0 {
-		klog.Errorf("Boot disk size is not found for node %s, using default size %v", node.Name, DefaultBootDiskSizeGB)
+		klog.V(5).Infof("Boot disk size is not found for node %s, using default size %v", node.Name, DefaultBootDiskSizeGB)
 		bootDiskSize = DefaultBootDiskSizeGB
 	}
 	bootDiskType := node.Annotations[BootDiskTypeAnnotation]
@@ -102,7 +103,7 @@ func (model *GcePriceModel) NodePrice(node *apiv1.Node, startTime time.Time, end
 		bootDiskType = val
 	}
 	if bootDiskType == "" {
-		klog.Errorf("Boot disk type is not found for node %s, using default type %s", node.Name, DefaultBootDiskType)
+		klog.V(5).Infof("Boot disk type is not found for node %s, using default type %s", node.Name, DefaultBootDiskType)
 		bootDiskType = DefaultBootDiskType
 	}
 	bootDiskPrice := model.PriceInfo.BootDiskPricePerHour()[bootDiskType]
@@ -155,11 +156,8 @@ func (model *GcePriceModel) getPreemptibleDiscount(node *apiv1.Node) float64 {
 // PodPrice returns a theoretical minimum price of running a pod for a given
 // period of time on a perfectly matching machine.
 func (model *GcePriceModel) PodPrice(pod *apiv1.Pod, startTime time.Time, endTime time.Time) (float64, error) {
-	price := 0.0
-	for _, container := range pod.Spec.Containers {
-		price += model.getBasePrice(container.Resources.Requests, "", startTime, endTime)
-		price += model.getAdditionalPrice(container.Resources.Requests, startTime, endTime)
-	}
+	podRequests := podutils.PodRequests(pod)
+	price := model.getBasePrice(podRequests, "", startTime, endTime) + model.getAdditionalPrice(podRequests, startTime, endTime)
 	return price, nil
 }
 

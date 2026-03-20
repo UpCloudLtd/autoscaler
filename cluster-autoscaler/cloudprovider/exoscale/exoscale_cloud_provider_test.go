@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofrs/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 	apiv1 "k8s.io/api/core/v1"
@@ -128,7 +128,7 @@ func (ts *cloudProviderTestSuite) SetupTest() {
 	ts.T().Setenv("EXOSCALE_API_KEY", "x")
 	ts.T().Setenv("EXOSCALE_API_SECRET", "x")
 
-	manager, err := newManager()
+	manager, err := newManager(cloudprovider.NodeGroupDiscoveryOptions{})
 	if err != nil {
 		ts.T().Fatalf("error initializing cloud provider manager: %v", err)
 	}
@@ -146,10 +146,7 @@ func (ts *cloudProviderTestSuite) TearDownTest() {
 }
 
 func (ts *cloudProviderTestSuite) randomID() string {
-	id, err := uuid.NewV4()
-	if err != nil {
-		ts.T().Fatalf("unable to generate a new UUID: %s", err)
-	}
+	id := uuid.New()
 	return id.String()
 }
 
@@ -214,6 +211,17 @@ func (ts *cloudProviderTestSuite) TestExoscaleCloudProvider_NodeGroupForNode_Ins
 }
 
 func (ts *cloudProviderTestSuite) TestExoscaleCloudProvider_NodeGroupForNode_SKSNodepool() {
+	ts.p.manager.client.(*exoscaleClientMock).
+		On("GetQuota", ts.p.manager.ctx, ts.p.manager.zone, testComputeInstanceQuotaName).
+		Return(
+			&egoscale.Quota{
+				Resource: &testComputeInstanceQuotaName,
+				Usage:    &testComputeInstanceQuotaUsage,
+				Limit:    &testComputeInstanceQuotaLimit,
+			},
+			nil,
+		)
+
 	ts.p.manager.client.(*exoscaleClientMock).
 		On("ListSKSClusters", ts.p.manager.ctx, ts.p.manager.zone).
 		Return(
@@ -312,6 +320,17 @@ func (ts *cloudProviderTestSuite) TestExoscaleCloudProvider_NodeGroups() {
 	// we mock 1 Instance Pool based Nodegroup and 1 SKS Nodepool based
 	// Nodegroup. If everything works as expected, the
 	// cloudprovider.NodeGroups() method should return 2 Nodegroups.
+
+	ts.p.manager.client.(*exoscaleClientMock).
+		On("GetQuota", ts.p.manager.ctx, ts.p.manager.zone, testComputeInstanceQuotaName).
+		Return(
+			&egoscale.Quota{
+				Resource: &testComputeInstanceQuotaName,
+				Usage:    &testComputeInstanceQuotaUsage,
+				Limit:    &testComputeInstanceQuotaLimit,
+			},
+			nil,
+		)
 
 	ts.p.manager.client.(*exoscaleClientMock).
 		On("GetInstancePool", ts.p.manager.ctx, ts.p.manager.zone, instancePoolID).

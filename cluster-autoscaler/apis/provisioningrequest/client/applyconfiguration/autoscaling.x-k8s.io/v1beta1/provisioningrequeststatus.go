@@ -19,18 +19,26 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	autoscalingxk8siov1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// ProvisioningRequestStatusApplyConfiguration represents an declarative configuration of the ProvisioningRequestStatus type for use
+// ProvisioningRequestStatusApplyConfiguration represents a declarative configuration of the ProvisioningRequestStatus type for use
 // with apply.
+//
+// ProvisioningRequestStatus represents the status of the resource reservation.
 type ProvisioningRequestStatusApplyConfiguration struct {
-	Conditions               []v1.Condition            `json:"conditions,omitempty"`
-	ProvisioningClassDetails map[string]v1beta1.Detail `json:"provisioningClassDetails,omitempty"`
+	// Conditions represent the observations of a Provisioning Request's
+	// current state. Those will contain information whether the capacity
+	// was found/created or if there were any issues. The condition types
+	// may differ between different provisioning classes.
+	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	// ProvisioningClassDetails contains all other values custom provisioning classes may
+	// want to pass to end users.
+	ProvisioningClassDetails map[string]autoscalingxk8siov1beta1.Detail `json:"provisioningClassDetails,omitempty"`
 }
 
-// ProvisioningRequestStatusApplyConfiguration constructs an declarative configuration of the ProvisioningRequestStatus type for use with
+// ProvisioningRequestStatusApplyConfiguration constructs a declarative configuration of the ProvisioningRequestStatus type for use with
 // apply.
 func ProvisioningRequestStatus() *ProvisioningRequestStatusApplyConfiguration {
 	return &ProvisioningRequestStatusApplyConfiguration{}
@@ -39,9 +47,12 @@ func ProvisioningRequestStatus() *ProvisioningRequestStatusApplyConfiguration {
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *ProvisioningRequestStatusApplyConfiguration) WithConditions(values ...v1.Condition) *ProvisioningRequestStatusApplyConfiguration {
+func (b *ProvisioningRequestStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *ProvisioningRequestStatusApplyConfiguration {
 	for i := range values {
-		b.Conditions = append(b.Conditions, values[i])
+		if values[i] == nil {
+			panic("nil value passed to WithConditions")
+		}
+		b.Conditions = append(b.Conditions, *values[i])
 	}
 	return b
 }
@@ -50,9 +61,9 @@ func (b *ProvisioningRequestStatusApplyConfiguration) WithConditions(values ...v
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the ProvisioningClassDetails field,
 // overwriting an existing map entries in ProvisioningClassDetails field with the same key.
-func (b *ProvisioningRequestStatusApplyConfiguration) WithProvisioningClassDetails(entries map[string]v1beta1.Detail) *ProvisioningRequestStatusApplyConfiguration {
+func (b *ProvisioningRequestStatusApplyConfiguration) WithProvisioningClassDetails(entries map[string]autoscalingxk8siov1beta1.Detail) *ProvisioningRequestStatusApplyConfiguration {
 	if b.ProvisioningClassDetails == nil && len(entries) > 0 {
-		b.ProvisioningClassDetails = make(map[string]v1beta1.Detail, len(entries))
+		b.ProvisioningClassDetails = make(map[string]autoscalingxk8siov1beta1.Detail, len(entries))
 	}
 	for k, v := range entries {
 		b.ProvisioningClassDetails[k] = v
