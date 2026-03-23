@@ -7,9 +7,10 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
-- fixed regressions in `upCloudNodeGroup` afer syncin with upstream `master`:
-  - added `ForceDeleteNodes()` and delegating it to the existing `DeleteNodes()` flow
-  - updated `TemplateNodeInfo()` to match the current upstream `cloudprovider.NodeGroup` signature
+- fixed regressions after syncing with upstream `master`:
+  - use `*coreoptions.AutoscalerOptions` in UpCloud provider builder
+  - in `upCloudNodeGroup`: added `ForceDeleteNodes()` and delegating it to the existing `DeleteNodes()` flow
+  - in `upCloudNodeGroup`: updated `TemplateNodeInfo()` to match the current upstream `cloudprovider.NodeGroup` signature
 
 ### Changed
 
