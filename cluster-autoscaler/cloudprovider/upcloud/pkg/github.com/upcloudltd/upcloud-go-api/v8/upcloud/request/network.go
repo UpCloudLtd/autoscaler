@@ -123,7 +123,8 @@ func (r ModifyNetworkRequest) MarshalJSON() ([]byte, error) {
 	n := max(len(r.ClearIPNetworksFields), len(ipNetworks))
 	newIpNetworks := make([]interface{}, n)
 
-	for i := range n {
+	// Go 1.21 compatibility: integer ranging requires Go 1.22+.
+	for i := 0; i < n; i++ {
 		net := make(map[string]interface{})
 		if i < len(ipNetworks) {
 			if prev, ok := ipNetworks[i].(map[string]interface{}); ok {
