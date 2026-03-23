@@ -3,9 +3,8 @@ package request
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
 )
 
 const (
@@ -48,17 +47,61 @@ func (r *GetKubernetesClusterRequest) RequestURL() string {
 
 // CreateKubernetesClusterRequest represents a request to create a Kubernetes cluster
 type CreateKubernetesClusterRequest struct {
-	Name              string                `json:"name"`
-	Network           string                `json:"network"`
-	NetworkCIDR       string                `json:"network_cidr"`
-	NodeGroups        []KubernetesNodeGroup `json:"node_groups"`
-	Zone              string                `json:"zone"`
-	Plan              string                `json:"plan,omitempty"`
-	PrivateNodeGroups bool                  `json:"private_node_groups"`
+	ControlPlaneIPFilter []string              `json:"control_plane_ip_filter"`
+	Labels               []upcloud.Label       `json:"labels,omitempty"`
+	Name                 string                `json:"name"`
+	Network              string                `json:"network"`
+	NetworkCIDR          string                `json:"network_cidr"`
+	NodeGroups           []KubernetesNodeGroup `json:"node_groups"`
+	Version              string                `json:"version"`
+	Zone                 string                `json:"zone"`
+	Plan                 string                `json:"plan,omitempty"`
+	PrivateNodeGroups    bool                  `json:"private_node_groups"`
+	// The default storage encryption strategy for all node groups (optional).
+	StorageEncryption upcloud.StorageEncryption `json:"storage_encryption,omitempty"`
 }
 
 func (r *CreateKubernetesClusterRequest) RequestURL() string {
 	return kubernetesClusterBasePath
+}
+
+type ModifyKubernetesCluster struct {
+	ControlPlaneIPFilter *[]string        `json:"control_plane_ip_filter,omitempty"`
+	Labels               *[]upcloud.Label `json:"labels,omitempty"`
+}
+
+type ModifyKubernetesClusterRequest struct {
+	ClusterUUID string `json:"-"`
+	Cluster     ModifyKubernetesCluster
+}
+
+func (r *ModifyKubernetesClusterRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.Cluster)
+}
+
+func (r *ModifyKubernetesClusterRequest) RequestURL() string {
+	return fmt.Sprintf("%s/%s", kubernetesClusterBasePath, r.ClusterUUID)
+}
+
+type GetKubernetesClusterAvailableUpgradesRequest struct {
+	ClusterUUID string `json:"-"`
+}
+
+func (r *GetKubernetesClusterAvailableUpgradesRequest) RequestURL() string {
+	return fmt.Sprintf("%s/%s/available-upgrades", kubernetesClusterBasePath, r.ClusterUUID)
+}
+
+type UpgradeKubernetesClusterRequest struct {
+	ClusterUUID string `json:"-"`
+	Upgrade     upcloud.KubernetesClusterUpgrade
+}
+
+func (r *UpgradeKubernetesClusterRequest) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.Upgrade)
+}
+
+func (r *UpgradeKubernetesClusterRequest) RequestURL() string {
+	return fmt.Sprintf("%s/%s/upgrade", kubernetesClusterBasePath, r.ClusterUUID)
 }
 
 // DeleteKubernetesClusterRequest represents a request to delete a Kubernetes cluster
@@ -74,12 +117,23 @@ func (r *DeleteKubernetesClusterRequest) RequestURL() string {
 // to enter a desired state
 type WaitForKubernetesClusterStateRequest struct {
 	DesiredState upcloud.KubernetesClusterState `json:"-"`
-	Timeout      time.Duration                  `json:"-"`
 	UUID         string                         `json:"-"`
 }
 
 func (r *WaitForKubernetesClusterStateRequest) RequestURL() string {
 	return fmt.Sprintf("%s/%s", kubernetesClusterBasePath, r.UUID)
+}
+
+// WaitForKubernetesNodeGroupStateRequest represents a request to wait for a Kubernetes node group
+// to enter a desired state
+type WaitForKubernetesNodeGroupStateRequest struct {
+	DesiredState upcloud.KubernetesNodeGroupState `json:"-"`
+	ClusterUUID  string                           `json:"-"`
+	Name         string                           `json:"-"`
+}
+
+func (r *WaitForKubernetesNodeGroupStateRequest) RequestURL() string {
+	return fmt.Sprintf("%s/%s/node-groups/%s", kubernetesClusterBasePath, r.ClusterUUID, r.Name)
 }
 
 // GetKubernetesKubeconfigRequest represents a request to get kubeconfig for a Kubernetes cluster
@@ -126,6 +180,14 @@ type KubernetesNodeGroup struct {
 	Taints               []upcloud.KubernetesTaint      `json:"taints,omitempty"`
 	AntiAffinity         bool                           `json:"anti_affinity,omitempty"`
 	UtilityNetworkAccess *bool                          `json:"utility_network_access,omitempty"`
+	// Node group custom plan properties. Required when plan is set as "custom".
+	CustomPlan *upcloud.KubernetesNodeGroupCustomPlan `json:"custom_plan,omitempty"`
+	// Node group cloud native plan properties. Optional to customise a cloud native plan.
+	CloudNativePlan *upcloud.KubernetesNodeGroupCloudNativePlan `json:"cloud_native_plan,omitempty"`
+	// Node group GPU plan properties. Optional to customise a GPU plan.
+	GPUPlan *upcloud.KubernetesNodeGroupGPUPlan `json:"gpu_plan,omitempty"`
+	// node group storage encryption strategy (optional).
+	StorageEncryption upcloud.StorageEncryption `json:"storage_encryption,omitempty"`
 }
 
 type CreateKubernetesNodeGroupRequest struct {

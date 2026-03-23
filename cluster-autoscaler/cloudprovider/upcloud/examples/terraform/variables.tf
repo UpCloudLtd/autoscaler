@@ -9,11 +9,19 @@ terraform {
 
 variable "autoscaler_username" {
   type = string
+  default = null
 }
 
 variable "autoscaler_password" {
   type      = string
   sensitive = true
+  default   = null
+}
+
+variable "autoscaler_token" {
+  type      = string
+  sensitive = true
+  default   = null
 }
 
 variable "cluster_zone" {

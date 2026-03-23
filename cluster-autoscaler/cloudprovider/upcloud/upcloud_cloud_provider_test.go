@@ -26,7 +26,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/mocks"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 )
 
@@ -115,6 +115,37 @@ func TestBuildCloudConfig(t *testing.T) {
 	got, err := buildCloudConfig(config.AutoscalingOptions{UserAgent: want.UserAgent})
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+}
+
+func TestBuildCloudConfig_WithToken(t *testing.T) {
+	t.Setenv(envUpCloudClusterID, uuid.NewString())
+	t.Setenv(envUpCloudToken, "ucat_test_token")
+
+	got, err := buildCloudConfig(config.AutoscalingOptions{UserAgent: "uks-agent"})
+	require.NoError(t, err)
+	require.Equal(t, upCloudConfig{
+		ClusterID: got.ClusterID,
+		Token:     "ucat_test_token",
+		UserAgent: "uks-agent",
+	}, got)
+}
+
+func TestBuildCloudConfig_PrefersTokenOverBasicAuth(t *testing.T) {
+	t.Setenv(envUpCloudClusterID, uuid.NewString())
+	t.Setenv(envUpCloudToken, "ucat_test_token")
+	t.Setenv(envUpCloudUsername, "uks-username")
+	t.Setenv(envUpCloudPassword, "uks-passwd")
+
+	got, err := buildCloudConfig(config.AutoscalingOptions{UserAgent: "uks-agent"})
+	require.NoError(t, err)
+	require.Equal(t, "ucat_test_token", got.Token)
+	require.Empty(t, got.Username)
+	require.Empty(t, got.Password)
+}
+
+func TestNewUpCloudService_WithToken(t *testing.T) {
+	_, err := newUpCloudService(upCloudConfig{Token: "ucat_test_token"})
+	require.NoError(t, err)
 }
 
 func TestUpCloudCloudProvider_GPULabel(t *testing.T) {

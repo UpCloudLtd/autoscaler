@@ -2,11 +2,15 @@ package upcloud
 
 import "encoding/json"
 
-// Constants
+type RouterStaticRouteType string
+
 const (
 	NetworkTypePrivate = "private"
 	NetworkTypePublic  = "public"
 	NetworkTypeUtility = "utility"
+
+	RouterStaticRouteTypeService RouterStaticRouteType = "service"
+	RouterStaticRouteTypeUser    RouterStaticRouteType = "user"
 )
 
 // ServerInterface represent a network interface on the server
@@ -84,14 +88,57 @@ func (s *Interface) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+type NetworkRouteSource string
+
+type NetworkRouteType string
+
+const (
+	NetworkRouteSourceRouterConnectedNetwork NetworkRouteSource = "router-connected-networks"
+	NetworkRouteSourceStaticSource           NetworkRouteSource = "static-route"
+	NetworkRouteTypeUser                     NetworkRouteType   = "user"
+	NetworkRouteTypeService                  NetworkRouteType   = "service"
+)
+
+type DHCPRoutesConfiguration struct {
+	EffectiveRoutesAutoPopulation EffectiveRoutesAutoPopulation `json:"effective_routes_auto_population"`
+}
+
+type EffectiveRoutesAutoPopulation struct {
+	Enabled             Boolean               `json:"enabled"`
+	ExcludeBySource     *[]NetworkRouteSource `json:"exclude_by_source,omitempty"`
+	FilterByDestination *[]string             `json:"filter_by_destination,omitempty"`
+	FilterByRouteType   *[]NetworkRouteType   `json:"filter_by_route_type,omitempty"`
+}
+
+type EffectiveRoute struct {
+	Source           NetworkRouteSource `json:"source,omitempty"`
+	Route            string             `json:"route"`
+	Nexthop          string             `json:"nexthop,omitempty"`
+	Type             NetworkRouteType   `json:"type,omitempty"`
+	SourceResourceID string             `json:"source_resource_id,omitempty"`
+}
+
+type EffectiveRouteSlice []EffectiveRoute
+
+type DHCPEffectiveRoute struct {
+	AutoPopulated Boolean `json:"auto_populated"`
+	Route         string  `json:"route"`
+	Nexthop       string  `json:"nexthop,omitempty"`
+}
+
+type DHCPEffectiveRouteSlice []DHCPEffectiveRoute
+
 // IPNetwork represents an IP network in a response.
 type IPNetwork struct {
-	Address          string   `json:"address,omitempty"`
-	DHCP             Boolean  `json:"dhcp"`
-	DHCPDefaultRoute Boolean  `json:"dhcp_default_route"`
-	DHCPDns          []string `json:"dhcp_dns,omitempty"`
-	Family           string   `json:"family,omitempty"`
-	Gateway          string   `json:"gateway,omitempty"`
+	Address                 string                  `json:"address,omitempty"`
+	DHCP                    Boolean                 `json:"dhcp"`
+	DHCPDefaultRoute        Boolean                 `json:"dhcp_default_route"`
+	DHCPDns                 []string                `json:"dhcp_dns,omitempty"`
+	DHCPRoutes              []string                `json:"dhcp_routes,omitempty"`
+	Family                  string                  `json:"family,omitempty"`
+	Gateway                 string                  `json:"gateway,omitempty"`
+	DHCPRoutesConfiguration DHCPRoutesConfiguration `json:"dhcp_routes_configuration,omitempty"`
+	DHCPEffectiveRoutes     DHCPEffectiveRouteSlice `json:"dhcp_effective_routes,omitempty"`
 }
 
 // IPNetworkSlice is a slice of IPNetworks
@@ -156,14 +203,15 @@ type NetworkServer struct {
 
 // Network represents a network in a networking response.
 type Network struct {
-	IPNetworks IPNetworkSlice     `json:"ip_networks"`
-	Name       string             `json:"name"`
-	Type       string             `json:"type"`
-	UUID       string             `json:"uuid"`
-	Zone       string             `json:"zone"`
-	Router     string             `json:"router"`
-	Servers    NetworkServerSlice `json:"servers"`
-	Labels     []Label            `json:"labels"`
+	IPNetworks      IPNetworkSlice      `json:"ip_networks"`
+	Name            string              `json:"name"`
+	Type            string              `json:"type"`
+	UUID            string              `json:"uuid"`
+	Zone            string              `json:"zone"`
+	Router          string              `json:"router"`
+	Servers         NetworkServerSlice  `json:"servers"`
+	Labels          []Label             `json:"labels"`
+	EffectiveRoutes EffectiveRouteSlice `json:"effective_routes,omitempty"`
 }
 
 // UnmarshalJSON is a custom unmarshaller that deals with
@@ -292,6 +340,15 @@ type Router struct {
 	Type             string             `json:"type"`
 	UUID             string             `json:"uuid"`
 	Labels           []Label            `json:"labels"`
+	StaticRoutes     []StaticRoute      `json:"static_routes"`
+}
+
+// StaticRoute represents a Static route
+type StaticRoute struct {
+	Name    string                `json:"name,omitempty"`
+	Route   string                `json:"route"`
+	Nexthop string                `json:"nexthop"`
+	Type    RouterStaticRouteType `json:"type,omitempty"`
 }
 
 // UnmarshalJSON is a custom unmarshaller that deals with

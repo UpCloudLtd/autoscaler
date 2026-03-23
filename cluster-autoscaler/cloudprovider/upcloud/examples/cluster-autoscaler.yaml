@@ -37,16 +37,24 @@ spec:
           env:
             - name: UPCLOUD_CLUSTER_ID
               value: "${UPCLOUD_CLUSTER_ID}"
+            - name: UPCLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upcloud-autoscaler
+                  key: token
+                  optional: true
             - name: UPCLOUD_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: upcloud-autoscaler
                   key: username
+                  optional: true
             - name: UPCLOUD_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: upcloud-autoscaler
                   key: password
+                  optional: true
           volumeMounts:
             - name: ssl-certs
               mountPath: /etc/ssl/certs/ca-certificates.crt

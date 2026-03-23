@@ -11,8 +11,9 @@ resource "kubernetes_secret" "autoscaler" {
     namespace = "kube-system"
   }
   data = {
-    username = var.autoscaler_username
-    password = var.autoscaler_password
+    token    = var.autoscaler_token != null ? var.autoscaler_token : ""
+    username = var.autoscaler_username != null ? var.autoscaler_username : ""
+    password = var.autoscaler_password != null ? var.autoscaler_password : ""
   }
 }
 
@@ -64,6 +65,15 @@ resource "kubernetes_deployment" "autoscaler" {
           env {
             name  = "UPCLOUD_CLUSTER_ID"
             value = resource.upcloud_kubernetes_cluster.autoscaler.id
+          }
+          env {
+            name = "UPCLOUD_TOKEN"
+            value_from {
+              secret_key_ref {
+                key  = "token"
+                name = "upcloud-autoscaler"
+              }
+            }
           }
           env {
             name = "UPCLOUD_USERNAME"

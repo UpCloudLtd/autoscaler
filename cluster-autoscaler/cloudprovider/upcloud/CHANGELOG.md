@@ -5,6 +5,10 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- added support for using the autoscaler with an UpCloud API token, via `UPCLOUD_TOKEN` env var
+
 ### Fixed
 
 - fixed regressions after syncing with upstream `master`:
