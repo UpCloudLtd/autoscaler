@@ -1,6 +1,6 @@
 
-UPCLOUD_SDK_PACKAGE ?= github.com/upcloudltd/upcloud-go-api/v6
-UPCLOUD_SDK_VERSION ?= v6.5.0
+UPCLOUD_SDK_PACKAGE ?= github.com/upcloudltd/upcloud-go-api/v8
+UPCLOUD_SDK_VERSION ?= v8.35.0
 
 IMAGE_TAG ?= cluster-autoscaler-upcloud:dev
 
