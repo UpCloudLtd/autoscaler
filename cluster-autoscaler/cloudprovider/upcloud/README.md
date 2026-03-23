@@ -12,7 +12,7 @@ Additional info about the Cluster Autoscaler (CA) can be found from the project'
 Docker images are available in GitHub package registry:
 
 ```shell
-$ docker pull ghcr.io/upcloudltd/autoscaler:v1.29.4
+$ docker pull ghcr.io/upcloudltd/autoscaler:v1.29.5
 ```
 
 See all images at https://github.com/orgs/UpCloudLtd/packages/container/package/autoscaler
