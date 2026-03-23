@@ -28,6 +28,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/client"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v6/upcloud/service"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
+	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/klog/v2"
@@ -170,11 +171,11 @@ func (u *upCloudCloudProvider) Cleanup() error {
 }
 
 // BuildUpCloud builds UpCloud's cloud provider implementation
-func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
+func BuildUpCloud(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutProviderInit)
 	defer cancel()
 
-	cfg, err := buildCloudConfig(opts)
+	cfg, err := buildCloudConfig(opts.AutoscalingOptions)
 	if err != nil {
 		klog.Fatalf("failed to initialize UpCloud config: %v", err)
 	}
@@ -182,7 +183,7 @@ func BuildUpCloud(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDisc
 	if err != nil {
 		klog.Fatalf("failed to initialize UpCloud service: %v", err)
 	}
-	manager, err := newManager(ctx, svc, cfg, opts, do)
+	manager, err := newManager(ctx, svc, cfg, opts.AutoscalingOptions, do)
 	if err != nil {
 		klog.Fatalf("failed to initialize manager: %v", err)
 	}
