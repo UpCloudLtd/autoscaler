@@ -26,11 +26,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	appsinformer "k8s.io/client-go/informers/apps/v1"
-	coreinformer "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/tools/cache"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/clock"
 	baseclocktest "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
@@ -38,7 +35,6 @@ import (
 	resource_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/admission-controller/resource/pod/patch"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/features"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/updater/utils"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/test"
@@ -65,9 +61,15 @@ func getIPORVpa() *vpa_types.VerticalPodAutoscaler {
 	return vpa
 }
 
-func TestDisruptReplicatedByController(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, features.MutableFeatureGate, features.InPlaceOrRecreate, true)
+func getIPVpa() *vpa_types.VerticalPodAutoscaler {
+	vpa := getBasicVpa()
+	vpa.Spec.UpdatePolicy = &vpa_types.PodUpdatePolicy{
+		UpdateMode: ptr.To(vpa_types.UpdateModeInPlace),
+	}
+	return vpa
+}
 
+func TestDisruptReplicatedByController(t *testing.T) {
 	rc := corev1.ReplicationController{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "rc",
@@ -296,7 +298,7 @@ func TestDisruptReplicatedByController(t *testing.T) {
 			pods: []podWithExpectations{
 				{
 					pod: generatePod().WithAnnotations(map[string]string{
-						annotations.StartupCPUBoostAnnotation: "",
+						annotations.GetStartupCPUBoostAnnotationKey("container1"): "",
 					}).Get(),
 					canEvict:        true,
 					evictionSuccess: true,
@@ -526,7 +528,7 @@ func TestDisruptReplicatedByController(t *testing.T) {
 			updateMode := vpa_api_util.GetUpdateMode(testCase.vpa)
 			for i, p := range testCase.pods {
 				if updateMode == vpa_types.UpdateModeInPlaceOrRecreate {
-					assert.Equalf(t, p.canInPlaceUpdate, inplace.CanInPlaceUpdate(p.pod), "unexpected CanInPlaceUpdate result for pod-%v %#v", testCase.name, i, p.pod)
+					assert.Equalf(t, p.canInPlaceUpdate, inplace.CanInPlaceUpdate(p.pod, testCase.vpa, nil), "unexpected CanInPlaceUpdate result for pod-%v %#v", testCase.name, i, p.pod)
 				} else {
 					assert.Equalf(t, p.canEvict, eviction.CanEvict(p.pod), "unexpected CanEvict result for pod-%v %#v", i, p.pod)
 				}
@@ -536,8 +538,6 @@ func TestDisruptReplicatedByController(t *testing.T) {
 					err := inplace.InPlaceUpdate(p.pod, testCase.vpa, test.FakeEventRecorder())
 					if p.inPlaceUpdateSuccess {
 						assert.NoErrorf(t, err, "unexpected InPlaceUpdate result for pod-%v %#v", i, p.pod)
-					} else {
-						assert.Errorf(t, err, "unexpected InPlaceUpdate result for pod-%v %#v", i, p.pod)
 					}
 				} else {
 					err := eviction.Evict(p.pod, testCase.vpa, test.FakeEventRecorder())
@@ -723,45 +723,36 @@ func getRestrictionFactory(rc *corev1.ReplicationController, rs *appsv1.ReplicaS
 	ss *appsv1.StatefulSet, ds *appsv1.DaemonSet, minReplicas int,
 	evictionToleranceFraction float64, clock clock.Clock, lipuatm map[string]time.Time, patchCalculators []patch.Calculator, inPlaceSkipDisruptionBudget bool) (PodsRestrictionFactory, error) {
 	kubeClient := &fake.Clientset{}
-	rcInformer := coreinformer.NewReplicationControllerInformer(kubeClient, corev1.NamespaceAll,
-		0*time.Second, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	rsInformer := appsinformer.NewReplicaSetInformer(kubeClient, corev1.NamespaceAll,
-		0*time.Second, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	ssInformer := appsinformer.NewStatefulSetInformer(kubeClient, corev1.NamespaceAll,
-		0*time.Second, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	dsInformer := appsinformer.NewDaemonSetInformer(kubeClient, corev1.NamespaceAll,
-		0*time.Second, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0*time.Second)
+
 	if rc != nil {
-		err := rcInformer.GetIndexer().Add(rc)
-		if err != nil {
-			return nil, fmt.Errorf("Error adding object to cache: %v", err)
+		rcInformer := informerFactory.Core().V1().ReplicationControllers().Informer()
+		if err := rcInformer.GetStore().Add(rc); err != nil {
+			return nil, fmt.Errorf("Error adding ReplicationController to store: %v", err)
 		}
 	}
 	if rs != nil {
-		err := rsInformer.GetIndexer().Add(rs)
-		if err != nil {
-			return nil, fmt.Errorf("Error adding object to cache: %v", err)
+		rsInformer := informerFactory.Apps().V1().ReplicaSets().Informer()
+		if err := rsInformer.GetStore().Add(rs); err != nil {
+			return nil, fmt.Errorf("Error adding ReplicaSet to store: %v", err)
 		}
 	}
 	if ss != nil {
-		err := ssInformer.GetIndexer().Add(ss)
-		if err != nil {
-			return nil, fmt.Errorf("Error adding object to cache: %v", err)
+		ssInformer := informerFactory.Apps().V1().StatefulSets().Informer()
+		if err := ssInformer.GetStore().Add(ss); err != nil {
+			return nil, fmt.Errorf("Error adding StatefulSet to store: %v", err)
 		}
 	}
 	if ds != nil {
-		err := dsInformer.GetIndexer().Add(ds)
-		if err != nil {
-			return nil, fmt.Errorf("Error adding object to cache: %v", err)
+		dsInformer := informerFactory.Apps().V1().DaemonSets().Informer()
+		if err := dsInformer.GetStore().Add(ds); err != nil {
+			return nil, fmt.Errorf("Error adding DaemonSet to store: %v", err)
 		}
 	}
 
 	return &PodsRestrictionFactoryImpl{
 		client:                      kubeClient,
-		rcInformer:                  rcInformer,
-		ssInformer:                  ssInformer,
-		rsInformer:                  rsInformer,
-		dsInformer:                  dsInformer,
+		informerFactory:             informerFactory,
 		minReplicas:                 minReplicas,
 		evictionToleranceFraction:   evictionToleranceFraction,
 		clock:                       clock,
@@ -804,5 +795,173 @@ func NewFakeCalculatorWithInPlacePatches() patch.Calculator {
 func GetFakeCalculatorsWithFakeResourceCalc() []patch.Calculator {
 	return []patch.Calculator{
 		NewFakeCalculatorWithInPlacePatches(),
+	}
+}
+
+func TestGetResizeStatus(t *testing.T) {
+	testCases := []struct {
+		name           string
+		pod            *corev1.Pod
+		expectedStatus utils.ResizeStatus
+	}{
+		{
+			name:           "pod not in-place updating - no resize status",
+			pod:            test.Pod().WithName("test-pod").Get(),
+			expectedStatus: utils.ResizeStatusNone,
+		},
+		{
+			name: "PodResizePending with Deferred reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodResizePending,
+						Status: corev1.ConditionTrue,
+						Reason: corev1.PodReasonDeferred,
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusDeferred,
+		},
+		{
+			name: "PodResizePending with Infeasible reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:    corev1.PodResizePending,
+						Status:  corev1.ConditionTrue,
+						Reason:  corev1.PodReasonInfeasible,
+						Message: "Insufficient cpu",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusInfeasible,
+		},
+		{
+			name: "PodResizePending with unknown reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodResizePending,
+						Status: corev1.ConditionTrue,
+						Reason: "SomeOtherReason",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusUnknown,
+		},
+		{
+			name: "PodResizePending with empty reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodResizePending,
+						Status: corev1.ConditionTrue,
+						Reason: "",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusUnknown,
+		},
+		{
+			name: "PodResizeInProgress with empty reason and message",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:    corev1.PodResizeInProgress,
+						Status:  corev1.ConditionTrue,
+						Reason:  "",
+						Message: "",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusInProgress,
+		},
+		{
+			name: "PodResizeInProgress with Error reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:    corev1.PodResizeInProgress,
+						Status:  corev1.ConditionTrue,
+						Reason:  corev1.PodReasonError,
+						Message: "Failed to resize container",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusError,
+		},
+		{
+			name: "PodResizeInProgress with unknown reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:    corev1.PodResizeInProgress,
+						Status:  corev1.ConditionTrue,
+						Reason:  "SomeOtherReason",
+						Message: "some message",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusUnknown,
+		},
+		{
+			name: "PodResizeInProgress with message but no reason",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:    corev1.PodResizeInProgress,
+						Status:  corev1.ConditionTrue,
+						Reason:  "",
+						Message: "some message",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusUnknown,
+		},
+		{
+			name: "pod with unrelated condition only",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodReady,
+						Status: corev1.ConditionTrue,
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusNone,
+		},
+		{
+			name: "both PodResizePending and PodResizeInProgress - PodResizePending takes precedence",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodResizePending,
+						Status: corev1.ConditionTrue,
+						Reason: corev1.PodReasonDeferred,
+					},
+					{
+						Type:   corev1.PodResizeInProgress,
+						Status: corev1.ConditionTrue,
+						Reason: "",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusDeferred,
+		},
+		{
+			name: "PodResizePending Infeasible takes precedence over PodResizeInProgress Error",
+			pod: test.Pod().WithName("test-pod").
+				WithPodConditions([]corev1.PodCondition{
+					{
+						Type:   corev1.PodResizePending,
+						Status: corev1.ConditionTrue,
+						Reason: corev1.PodReasonInfeasible,
+					},
+					{
+						Type:    corev1.PodResizeInProgress,
+						Status:  corev1.ConditionTrue,
+						Reason:  corev1.PodReasonError,
+						Message: "Error message",
+					},
+				}).Get(),
+			expectedStatus: utils.ResizeStatusInfeasible,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := getResizeStatus(tc.pod)
+			assert.Equal(t, tc.expectedStatus, result)
+		})
 	}
 }

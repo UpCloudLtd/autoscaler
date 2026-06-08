@@ -27,6 +27,7 @@ import (
 	drasnapshot "k8s.io/autoscaler/cluster-autoscaler/simulator/dynamicresources/snapshot"
 	drautils "k8s.io/autoscaler/cluster-autoscaler/simulator/dynamicresources/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/klogx"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/dynamic-resource-allocation/resourceclaim"
 	schedulerinterface "k8s.io/kube-scheduler/framework"
@@ -47,6 +48,7 @@ type PredicateSnapshot struct {
 
 // NewPredicateSnapshot builds a PredicateSnapshot.
 func NewPredicateSnapshot(snapshotStore clustersnapshot.ClusterSnapshotStore, fwHandle *framework.Handle, draEnabled bool, parallelism int, enableCSINodeAwareScheduling bool) *PredicateSnapshot {
+	parallelism = max(parallelism, 1)
 	snapshot := &PredicateSnapshot{
 		ClusterSnapshotStore:         snapshotStore,
 		draEnabled:                   draEnabled,
@@ -64,35 +66,11 @@ func NewPredicateSnapshot(snapshotStore clustersnapshot.ClusterSnapshotStore, fw
 }
 
 // SetClusterState resets the snapshot to an unforked state and replaces the contents of the snapshot
-// with the provided data. scheduledPods are correlated to their Nodes based on spec.NodeName.
+// with the provided data. scheduledPods are correlated to their Nodes based on spec.NodeName or status.NominatedNodeName.
+// The provided draSnapshot and csiSnapshot are treated as the source of truth and are eagerly
+// loaded into the created NodeInfo/PodInfo objects.
 func (s *PredicateSnapshot) SetClusterState(nodes []*apiv1.Node, scheduledPods []*apiv1.Pod, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) error {
 	s.ClusterSnapshotStore.Clear()
-
-	nodeInfos := make([]*schedulerimpl.NodeInfo, len(nodes))
-	nodeNameToIdx := make(map[string]int, len(nodes))
-	for i, node := range nodes {
-		ni := schedulerimpl.NewNodeInfo()
-		ni.SetNode(node)
-		nodeInfos[i] = ni
-		nodeNameToIdx[node.Name] = i
-	}
-
-	if s.parallelism > 1 {
-		s.setClusterStatePodsParallelized(nodeInfos, nodeNameToIdx, scheduledPods)
-	} else {
-		// TODO(macsko): Migrate to setClusterStatePodsParallelized for parallelism == 1
-		// after making sure the implementation is always correct in CA 1.33.
-		s.setClusterStatePodsSequential(nodeInfos, nodeNameToIdx, scheduledPods)
-	}
-
-	// We build NodeInfo objects with all their pods before adding them to the store.
-	// This allows parallelizing PodInfo construction and enables the store to
-	// perform bulk internal state / cache updates per-node rather than per-pod.
-	for _, ni := range nodeInfos {
-		if err := s.ClusterSnapshotStore.AddSchedulerNodeInfo(ni); err != nil {
-			return err
-		}
-	}
 
 	if draSnapshot == nil {
 		draSnapshot = drasnapshot.NewEmptySnapshot()
@@ -104,61 +82,103 @@ func (s *PredicateSnapshot) SetClusterState(nodes []*apiv1.Node, scheduledPods [
 	}
 	s.csiSnapshot = csiSnapshot
 
+	nodeInfos := make([]*framework.NodeInfo, len(nodes))
+	nodeNameToIdx := make(map[string]int, len(nodes))
+	for i, node := range nodes {
+		var slices []*resourceapi.ResourceSlice
+		if s.draEnabled && draSnapshot != nil {
+			slices, _ = draSnapshot.NodeResourceSlices(node.Name)
+		}
+		ni := framework.NewNodeInfo(node, slices)
+
+		if s.enableCSINodeAwareScheduling && csiSnapshot != nil {
+			csiNode, err := csiSnapshot.Get(node.Name)
+			if err != nil {
+				return fmt.Errorf("couldn't obtain csi node: %v", err)
+			}
+			ni.SetCSINode(csiNode)
+		}
+
+		nodeInfos[i] = ni
+		nodeNameToIdx[node.Name] = i
+	}
+
+	if err := s.setClusterStatePods(nodeInfos, nodeNameToIdx, scheduledPods); err != nil {
+		return err
+	}
+
+	// We build NodeInfo objects with all their pods before adding them to the store.
+	// This allows parallelizing PodInfo construction and enables the store to
+	// perform bulk internal state / cache updates per-node rather than per-pod.
+	for _, ni := range nodeInfos {
+		if err := s.ClusterSnapshotStore.StoreNodeInfo(ni); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (s *PredicateSnapshot) setClusterStatePodsSequential(nodeInfos []*schedulerimpl.NodeInfo, nodeNameToIdx map[string]int, scheduledPods []*apiv1.Pod) {
+func (s *PredicateSnapshot) setClusterStatePods(nodeInfos []*framework.NodeInfo, nodeNameToIdx map[string]int, scheduledPods []*apiv1.Pod) error {
+	loggingQuota := klogx.PodsLoggingQuota()
+	podInfosForNode := make([][]*framework.PodInfo, len(nodeInfos))
 	for _, pod := range scheduledPods {
-		if nodeIdx, ok := nodeNameToIdx[pod.Spec.NodeName]; ok {
-			podInfo, _ := schedulerimpl.NewPodInfo(pod)
-			nodeInfos[nodeIdx].AddPodInfo(podInfo)
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			nodeName = pod.Status.NominatedNodeName
 		}
-	}
-}
-
-func (s *PredicateSnapshot) setClusterStatePodsParallelized(nodeInfos []*schedulerimpl.NodeInfo, nodeNameToIdx map[string]int, scheduledPods []*apiv1.Pod) {
-	podsForNode := make([][]*apiv1.Pod, len(nodeInfos))
-	for _, pod := range scheduledPods {
-		if nodeIdx, ok := nodeNameToIdx[pod.Spec.NodeName]; ok {
-			podsForNode[nodeIdx] = append(podsForNode[nodeIdx], pod)
+		nodeIdx, ok := nodeNameToIdx[nodeName]
+		if !ok {
+			klogx.V(1).UpTo(loggingQuota).Warningf("SetClusterState: node %q bound or nominated by pod \"%s/%s\" does not exist in the snapshot", nodeName, pod.Namespace, pod.Name)
+			continue
 		}
+
+		var claims []*resourceapi.ResourceClaim
+		if s.draEnabled && s.draSnapshot != nil {
+			var err error
+			claims, err = s.draSnapshot.PodClaims(pod)
+			if err != nil {
+				return fmt.Errorf("couldn't obtain pod %s/%s claims: %v", pod.Namespace, pod.Name, err)
+			}
+		}
+
+		podInfo := framework.NewPodInfo(pod, claims)
+		podInfosForNode[nodeIdx] = append(podInfosForNode[nodeIdx], podInfo)
 	}
 
+	klogx.V(1).Over(loggingQuota).Warningf("Other %d pods were bound to or nominated non-existing node", -loggingQuota.Left())
 	ctx := context.Background()
 	workqueue.ParallelizeUntil(ctx, s.parallelism, len(nodeInfos), func(nodeIdx int) {
 		nodeInfo := nodeInfos[nodeIdx]
-		for _, pod := range podsForNode[nodeIdx] {
-			podInfo, _ := schedulerimpl.NewPodInfo(pod)
-			nodeInfo.AddPodInfo(podInfo)
+		for _, pi := range podInfosForNode[nodeIdx] {
+			nodeInfo.AddPodInfo(pi)
 		}
 	})
+
+	return nil
 }
 
 // GetNodeInfo returns an internal NodeInfo wrapping the relevant schedulerimpl.NodeInfo.
+//
+// TODO(DRA): Beware that it may return stale ResourceClaim data.
+// See framework.PodInfo.NeededResourceClaims comment.
 func (s *PredicateSnapshot) GetNodeInfo(nodeName string) (*framework.NodeInfo, error) {
 	schedNodeInfo, err := s.ClusterSnapshotStore.NodeInfos().Get(nodeName)
 	if err != nil {
 		return nil, err
 	}
-
-	wrappedNodeInfo := framework.WrapSchedulerNodeInfo(schedNodeInfo, nil, nil)
-	if s.draEnabled {
-		wrappedNodeInfo, err = s.draSnapshot.WrapSchedulerNodeInfo(schedNodeInfo)
-		if err != nil {
-			return nil, err
-		}
+	nodeInfo, ok := schedNodeInfo.(*framework.NodeInfo)
+	if !ok {
+		return nil, fmt.Errorf("expected: %T, got: %T in the underlying store", &framework.NodeInfo{}, schedNodeInfo)
 	}
 
-	if s.enableCSINodeAwareScheduling {
-		wrappedNodeInfo, err = s.csiSnapshot.AddCSINodeInfoToNodeInfo(wrappedNodeInfo)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return wrappedNodeInfo, nil
+	return nodeInfo, nil
 }
 
 // ListNodeInfos returns internal NodeInfos wrapping all schedulerimpl.NodeInfos in the snapshot.
+//
+// TODO(DRA): Beware that it may return stale ResourceClaim data.
+// See PodInfo.NeededResourceClaims comment.
 func (s *PredicateSnapshot) ListNodeInfos() ([]*framework.NodeInfo, error) {
 	schedNodeInfos, err := s.ClusterSnapshotStore.NodeInfos().List()
 	if err != nil {
@@ -166,28 +186,19 @@ func (s *PredicateSnapshot) ListNodeInfos() ([]*framework.NodeInfo, error) {
 	}
 	var result []*framework.NodeInfo
 	for _, schedNodeInfo := range schedNodeInfos {
-		wrappedNodeInfo := framework.WrapSchedulerNodeInfo(schedNodeInfo, nil, nil)
-
-		var err error
-		if s.draEnabled {
-			wrappedNodeInfo, err = s.draSnapshot.WrapSchedulerNodeInfo(schedNodeInfo)
-			if err != nil {
-				return nil, err
-			}
+		nodeInfo, ok := schedNodeInfo.(*framework.NodeInfo)
+		if !ok {
+			return nil, fmt.Errorf("expected: %T, got: %T in the underlying store", &framework.NodeInfo{}, schedNodeInfo)
 		}
 
-		if s.enableCSINodeAwareScheduling {
-			wrappedNodeInfo, err = s.csiSnapshot.AddCSINodeInfoToNodeInfo(wrappedNodeInfo)
-			if err != nil {
-				return nil, err
-			}
-		}
-		result = append(result, wrappedNodeInfo)
+		result = append(result, nodeInfo)
 	}
 	return result, nil
 }
 
 // AddNodeInfo adds the provided internal NodeInfo to the snapshot.
+// The DRA slices and CSI data are explicitly pushed into the underlying
+// draSnapshot and csiSnapshot before being stored.
 func (s *PredicateSnapshot) AddNodeInfo(nodeInfo *framework.NodeInfo) error {
 	if s.draEnabled {
 		// TODO(DRA): Add transaction-like clean-up in case of errors here - don't modify the state on any errors.
@@ -217,17 +228,18 @@ func (s *PredicateSnapshot) AddNodeInfo(nodeInfo *framework.NodeInfo) error {
 		}
 	}
 
-	return s.ClusterSnapshotStore.AddSchedulerNodeInfo(nodeInfo.ToScheduler())
+	return s.ClusterSnapshotStore.StoreNodeInfo(nodeInfo)
 }
 
 // RemoveNodeInfo removes a NodeInfo matching the provided nodeName from the snapshot.
+// The DRA slices and CSI data are removed from the underlying draSnapshot and csiSnapshot.
 func (s *PredicateSnapshot) RemoveNodeInfo(nodeName string) error {
 	nodeInfo, err := s.GetNodeInfo(nodeName)
 	if err != nil {
 		return err
 	}
 
-	if err := s.ClusterSnapshotStore.RemoveSchedulerNodeInfo(nodeName); err != nil {
+	if err := s.ClusterSnapshotStore.RemoveNodeInfo(nodeName); err != nil {
 		return err
 	}
 
@@ -248,6 +260,8 @@ func (s *PredicateSnapshot) RemoveNodeInfo(nodeName string) error {
 }
 
 // SchedulePod adds pod to the snapshot and schedules it to given node.
+// The scheduler's Reserve phase computes DRA claim allocations, which are pushed to the draSnapshot.
+// The updated claims are then pulled to construct the final PodInfo.
 func (s *PredicateSnapshot) SchedulePod(pod *apiv1.Pod, nodeName string) clustersnapshot.SchedulingError {
 	node, cycleState, schedErr := s.pluginRunner.RunFiltersOnNode(pod, nodeName)
 	if schedErr != nil {
@@ -264,13 +278,18 @@ func (s *PredicateSnapshot) SchedulePod(pod *apiv1.Pod, nodeName string) cluster
 		}
 	}
 
-	if err := s.ClusterSnapshotStore.ForceAddPod(pod, nodeName); err != nil {
+	podInfo, err := s.createPodInfo(pod)
+	if err != nil {
+		return clustersnapshot.NewSchedulingInternalError(pod, err.Error())
+	}
+	if err := s.ClusterSnapshotStore.StorePodInfo(podInfo, nodeName); err != nil {
 		return clustersnapshot.NewSchedulingInternalError(pod, err.Error())
 	}
 	return nil
 }
 
 // SchedulePodOnAnyNodeMatching adds pod to the snapshot and schedules it to any node matching the provided function.
+// Data flow is the same as SchedulePod.
 func (s *PredicateSnapshot) SchedulePodOnAnyNodeMatching(pod *apiv1.Pod, opts clustersnapshot.SchedulingOptions) (string, clustersnapshot.SchedulingError) {
 	node, cycleState, schedErr := s.pluginRunner.RunFiltersUntilPassingNode(pod, opts)
 	if schedErr != nil {
@@ -287,7 +306,11 @@ func (s *PredicateSnapshot) SchedulePodOnAnyNodeMatching(pod *apiv1.Pod, opts cl
 		}
 	}
 
-	if err := s.ClusterSnapshotStore.ForceAddPod(pod, node.Name); err != nil {
+	podInfo, err := s.createPodInfo(pod)
+	if err != nil {
+		return "", clustersnapshot.NewSchedulingInternalError(pod, err.Error())
+	}
+	if err := s.ClusterSnapshotStore.StorePodInfo(podInfo, node.Name); err != nil {
 		return "", clustersnapshot.NewSchedulingInternalError(pod, err.Error())
 	}
 	return node.Name, nil
@@ -319,7 +342,25 @@ func (s *PredicateSnapshot) UnschedulePod(namespace string, podName string, node
 		}
 	}
 
-	return s.ClusterSnapshotStore.ForceRemovePod(namespace, podName, nodeName)
+	return s.ClusterSnapshotStore.RemovePodInfo(namespace, podName, nodeName)
+}
+
+// ForceAddPod adds the given Pod to the Node with the given nodeName inside the snapshot without checking scheduler predicates.
+// This method will allocate internal PodInfo and include the DRA-related information (taken from the DRA snapshot).
+// It assumes the draSnapshot is already populated by the caller and just pulls from it to build the PodInfo.
+// It does NOT compute or reserve new claims.
+func (s *PredicateSnapshot) ForceAddPod(pod *apiv1.Pod, nodeName string) error {
+	podInfo, err := s.createPodInfo(pod)
+	if err != nil {
+		return err
+	}
+
+	return s.ClusterSnapshotStore.StorePodInfo(podInfo, nodeName)
+}
+
+// ForceRemovePod removes the given Pod from the snapshot.
+func (s *PredicateSnapshot) ForceRemovePod(namespace string, podName string, nodeName string) error {
+	return s.RemovePodInfo(namespace, podName, nodeName)
 }
 
 // CheckPredicates checks whether scheduler predicates pass for the given pod on the given node.
@@ -389,6 +430,11 @@ func (s *PredicateSnapshot) DeviceClassResolver() schedulerinterface.DeviceClass
 	return s.draSnapshot.DeviceClassResolver()
 }
 
+// PodGroups returns the snapshot as PodGroupLister.
+func (s *PredicateSnapshot) PodGroups() schedulerinterface.PodGroupLister {
+	return s.draSnapshot.PodGroups()
+}
+
 // CSINodes returns the CSI nodes snapshot.
 func (s *PredicateSnapshot) CSINodes() schedulerinterface.CSINodeLister {
 	return s.csiSnapshot.CSINodes()
@@ -406,6 +452,18 @@ func (s *PredicateSnapshot) verifyScheduledPodResourceClaims(pod *apiv1.Pod, nod
 		}
 	}
 	return nil
+}
+
+func (s *PredicateSnapshot) createPodInfo(pod *apiv1.Pod) (*framework.PodInfo, error) {
+	var claims []*resourceapi.ResourceClaim
+	if s.draEnabled {
+		var err error
+		claims, err = s.draSnapshot.PodClaims(pod)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't obtain pod %s/%s claims: %v", pod.Namespace, pod.Name, err)
+		}
+	}
+	return framework.NewPodInfo(pod, claims), nil
 }
 
 func (s *PredicateSnapshot) modifyResourceClaimsForScheduledPod(pod *apiv1.Pod, node *apiv1.Node, postFilterState *schedulerimpl.CycleState) error {
@@ -430,7 +488,9 @@ func (s *PredicateSnapshot) modifyResourceClaimsForNewPod(podInfo *framework.Pod
 	// so we don't add them. The claims should already be allocated in the provided PodInfo.
 	var podOwnedClaims []*resourceapi.ResourceClaim
 	for _, claim := range podInfo.NeededResourceClaims {
-		if err := resourceclaim.IsForPod(podInfo.Pod, claim); err == nil {
+		// TODO(autoscaler/issues/9570): KEP-5729 changed IsForPod to be able to work
+		// with pod groups, re-evaluate whether they need to be considered here.
+		if err := resourceclaim.IsForPod(podInfo.Pod, claim, false); err == nil {
 			podOwnedClaims = append(podOwnedClaims, claim)
 		}
 	}
