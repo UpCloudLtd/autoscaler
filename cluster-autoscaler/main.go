@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"net/http"
 	"os"
 	"os/signal"
@@ -45,6 +46,14 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/version"
 	"k8s.io/client-go/informers"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	// Cloud providers must be explicitly imported to be registered in the builder.
+	// The registration pattern allows for customizing the set of supported cloud providers
+	// by including or excluding these blank imports. This is particularly useful for
+	// external forks that want to avoid unnecessary dependencies.
+	// The router package is used to provide support for custom build tags (e.g. -tags aws).
+	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/router"
+
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	kube_flag "k8s.io/component-base/cli/flag"
@@ -191,6 +200,12 @@ func mustBuildAutoscaler(ctx context.Context, opts config.AutoscalingOptions, de
 func main() {
 	klog.InitFlags(nil)
 
+	// Opt into new klog behavior where -stderrthreshold is honored even when
+	// -logtostderr=true (kubernetes/klog#212, kubernetes/klog#432).
+	flag.Set("legacy_stderr_threshold_behavior", "false")
+	// Preserve backward-compatible default; users can override to WARNING or ERROR.
+	flag.Set("stderrthreshold", "INFO")
+
 	featureGate := utilfeature.DefaultMutableFeatureGate
 	loggingConfig := logsapi.NewLoggingConfiguration()
 
@@ -230,7 +245,7 @@ func main() {
 	}
 	ctrl.SetLogger(klog.NewKlogr())
 
-	healthCheck := metrics.NewHealthCheck(autoscalingOpts.MaxInactivityTime, autoscalingOpts.MaxFailingTime)
+	healthCheck := metrics.NewHealthCheck(autoscalingOpts.MaxInactivityTime, autoscalingOpts.MaxFailingTime, autoscalingOpts.MaxStartupTime)
 
 	klog.V(1).Infof("Cluster Autoscaler %s", version.ClusterAutoscalerVersion)
 

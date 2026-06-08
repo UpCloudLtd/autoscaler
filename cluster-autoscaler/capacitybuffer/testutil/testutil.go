@@ -158,10 +158,28 @@ func WithPodTemplateRef(name string) BufferOption {
 	}
 }
 
+// WithScalableRef sets the Spec.ScalableRef
+func WithScalableRef(apiGroup, kind, name string) BufferOption {
+	return func(b *v1.CapacityBuffer) {
+		b.Spec.ScalableRef = &v1.ScalableRef{
+			APIGroup: apiGroup,
+			Kind:     kind,
+			Name:     name,
+		}
+	}
+}
+
 // WithReplicas sets the Spec.Replicas
 func WithReplicas(replicas int32) BufferOption {
 	return func(b *v1.CapacityBuffer) {
 		b.Spec.Replicas = &replicas
+	}
+}
+
+// WithPercentage sets the Spec.Percentage
+func WithPercentage(percentage int32) BufferOption {
+	return func(b *v1.CapacityBuffer) {
+		b.Spec.Percentage = &percentage
 	}
 }
 
@@ -215,7 +233,8 @@ func NewPodTemplate(opts ...PodTemplateOption) *corev1.PodTemplate {
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{
-						Name: "container",
+						Name:  "container",
+						Image: "image",
 					},
 				},
 			},
@@ -238,7 +257,7 @@ func WithPodTemplateName(name string) PodTemplateOption {
 func WithPodTemplateResources(requests, limits corev1.ResourceList) PodTemplateOption {
 	return func(pt *corev1.PodTemplate) {
 		if len(pt.Template.Spec.Containers) == 0 {
-			pt.Template.Spec.Containers = append(pt.Template.Spec.Containers, corev1.Container{Name: "container"})
+			pt.Template.Spec.Containers = append(pt.Template.Spec.Containers, corev1.Container{Name: "container", Image: "image"})
 		}
 		pt.Template.Spec.Containers[0].Resources.Requests = requests
 		pt.Template.Spec.Containers[0].Resources.Limits = limits
@@ -309,5 +328,12 @@ func WithResourceQuotaScopes(scopes []corev1.ResourceQuotaScope) ResourceQuotaOp
 func WithResourceQuotaScopeSelector(selector *corev1.ScopeSelector) ResourceQuotaOption {
 	return func(rq *corev1.ResourceQuota) {
 		rq.Spec.ScopeSelector = selector
+	}
+}
+
+// WithNamespace is a generic functional option that sets the namespace for any kubernetes resource.
+func WithNamespace[T metav1.Object](namespace string) func(T) {
+	return func(obj T) {
+		obj.SetNamespace(namespace)
 	}
 }

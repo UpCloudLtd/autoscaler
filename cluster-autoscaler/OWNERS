@@ -1,15 +1,13 @@
 approvers:
 - aleksandra-malinowska
 - BigDarkClown
-- feiskyer
 - towca
 - x13n
 reviewers:
 - aleksandra-malinowska
 - BigDarkClown
-- feiskyer
-- vadasambar
 - x13n
 - elmiko
+- mtrqq
 labels:
 - area/cluster-autoscaler

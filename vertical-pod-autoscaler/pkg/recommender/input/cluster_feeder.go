@@ -44,6 +44,7 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
 	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/controller_fetcher"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/client"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 )
 
@@ -138,7 +139,11 @@ func WatchEvictionEventsWithRetries(ctx context.Context, kubeClient kube_client.
 				// Wait between attempts, retrying too often breaks API server.
 				waitTime := wait.Jitter(evictionWatchRetryWait, evictionWatchJitterFactor)
 				klog.V(1).InfoS("An attempt to watch eviction events finished", "waitTime", waitTime)
-				time.Sleep(waitTime)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(waitTime):
+				}
 			}
 		}
 	}()
@@ -178,6 +183,7 @@ func newPodClients(kubeClient kube_client.Interface, resourceEventHandler cache.
 		Handler:       resourceEventHandler,
 		ResyncPeriod:  time.Hour,
 		Indexers:      cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
+		Transform:     client.StripManagedFields,
 	}
 
 	store, controller := cache.NewInformerWithOptions(informerOptions)
@@ -467,7 +473,8 @@ func (feeder *clusterStateFeeder) LoadVPAs(ctx context.Context) {
 func (feeder *clusterStateFeeder) LoadPods() {
 	podSpecs, err := feeder.specClient.GetPodSpecs()
 	if err != nil {
-		klog.ErrorS(err, "Cannot get SimplePodSpecs")
+		klog.ErrorS(err, "Cannot get SimplePodSpecs, skipping LoadPods cycle")
+		return
 	}
 	pods := make(map[model.PodID]*spec.BasicPodSpec)
 	for _, spec := range podSpecs {
@@ -489,9 +496,12 @@ func (feeder *clusterStateFeeder) LoadPods() {
 				klog.V(0).InfoS("Failed to add container", "container", container.ID, "error", err)
 			}
 		}
+		initContainerNames := make([]string, 0, len(pod.InitContainers))
 		for _, initContainer := range pod.InitContainers {
-			podInitContainers := feeder.clusterState.Pods()[pod.ID].InitContainers
-			feeder.clusterState.Pods()[pod.ID].InitContainers = append(podInitContainers, initContainer.ID.ContainerName)
+			initContainerNames = append(initContainerNames, initContainer.ID.ContainerName)
+		}
+		if err = feeder.clusterState.SetInitContainers(pod.ID, initContainerNames); err != nil {
+			klog.V(0).InfoS("Failed to set init containers", "pod", klog.KRef(pod.ID.Namespace, pod.ID.PodName), "error", err)
 		}
 	}
 }

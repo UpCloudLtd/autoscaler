@@ -21,6 +21,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/klog/v2"
 	schedulerinterface "k8s.io/kube-scheduler/framework"
 	schedulerimpl "k8s.io/kubernetes/pkg/scheduler/framework"
@@ -144,13 +145,15 @@ func (data *internalBasicSnapshotData) clone() *internalBasicSnapshotData {
 	}
 }
 
-func (data *internalBasicSnapshotData) addNode(node *apiv1.Node) error {
-	if _, found := data.nodeInfoMap[node.Name]; found {
-		return fmt.Errorf("node %s already in snapshot", node.Name)
+func (data *internalBasicSnapshotData) addNodeInfo(nodeInfo schedulerinterface.NodeInfo) error {
+	name := nodeInfo.Node().Name
+	if _, found := data.nodeInfoMap[name]; found {
+		return fmt.Errorf("node %s already in snapshot", name)
 	}
-	nodeInfo := schedulerimpl.NewNodeInfo()
-	nodeInfo.SetNode(node)
-	data.nodeInfoMap[node.Name] = nodeInfo
+	data.nodeInfoMap[name] = nodeInfo
+	for _, podInfo := range nodeInfo.GetPods() {
+		data.addPvcUsedByPod(podInfo.GetPod())
+	}
 	return nil
 }
 
@@ -165,13 +168,12 @@ func (data *internalBasicSnapshotData) removeNodeInfo(nodeName string) error {
 	return nil
 }
 
-func (data *internalBasicSnapshotData) addPod(pod *apiv1.Pod, nodeName string) error {
+func (data *internalBasicSnapshotData) addPodInfo(podInfo schedulerinterface.PodInfo, nodeName string) error {
 	if _, found := data.nodeInfoMap[nodeName]; !found {
 		return clustersnapshot.ErrNodeNotFound
 	}
-	podInfo, _ := schedulerimpl.NewPodInfo(pod)
 	data.nodeInfoMap[nodeName].AddPodInfo(podInfo)
-	data.addPvcUsedByPod(pod)
+	data.addPvcUsedByPod(podInfo.GetPod())
 	return nil
 }
 
@@ -206,31 +208,23 @@ func (snapshot *BasicSnapshotStore) getInternalData() *internalBasicSnapshotData
 	return snapshot.data[len(snapshot.data)-1]
 }
 
-// AddSchedulerNodeInfo adds a NodeInfo.
-func (snapshot *BasicSnapshotStore) AddSchedulerNodeInfo(nodeInfo schedulerinterface.NodeInfo) error {
-	if err := snapshot.getInternalData().addNode(nodeInfo.Node()); err != nil {
-		return err
-	}
-	for _, podInfo := range nodeInfo.GetPods() {
-		if err := snapshot.getInternalData().addPod(podInfo.GetPod(), nodeInfo.Node().Name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// RemoveSchedulerNodeInfo removes nodes (and pods scheduled to it) from the snapshot.
-func (snapshot *BasicSnapshotStore) RemoveSchedulerNodeInfo(nodeName string) error {
+// RemoveNodeInfo removes nodes (and pods scheduled to it) from the snapshot.
+func (snapshot *BasicSnapshotStore) RemoveNodeInfo(nodeName string) error {
 	return snapshot.getInternalData().removeNodeInfo(nodeName)
 }
 
-// ForceAddPod adds pod to the snapshot and schedules it to given node.
-func (snapshot *BasicSnapshotStore) ForceAddPod(pod *apiv1.Pod, nodeName string) error {
-	return snapshot.getInternalData().addPod(pod, nodeName)
+// StoreNodeInfo adds the given *framework.NodeInfo to the snapshot without checking scheduler predicates.
+func (snapshot *BasicSnapshotStore) StoreNodeInfo(nodeInfo *framework.NodeInfo) error {
+	return snapshot.getInternalData().addNodeInfo(nodeInfo)
 }
 
-// ForceRemovePod removes pod from the snapshot.
-func (snapshot *BasicSnapshotStore) ForceRemovePod(namespace, podName, nodeName string) error {
+// StorePodInfo adds pod to the snapshot and schedules it to given node.
+func (snapshot *BasicSnapshotStore) StorePodInfo(podInfo *framework.PodInfo, nodeName string) error {
+	return snapshot.getInternalData().addPodInfo(podInfo, nodeName)
+}
+
+// RemovePodInfo removes pod from the snapshot.
+func (snapshot *BasicSnapshotStore) RemovePodInfo(namespace, podName, nodeName string) error {
 	return snapshot.getInternalData().removePod(namespace, podName, nodeName)
 }
 
@@ -273,6 +267,7 @@ func (snapshot *BasicSnapshotStore) Clear() {
 
 type basicSnapshotStoreNodeLister BasicSnapshotStore
 type basicSnapshotStoreStorageLister BasicSnapshotStore
+type basicSnapshotStorePodGroupStateLister BasicSnapshotStore
 
 // NodeInfos exposes snapshot as NodeInfoLister.
 func (snapshot *BasicSnapshotStore) NodeInfos() schedulerinterface.NodeInfoLister {
@@ -282,6 +277,11 @@ func (snapshot *BasicSnapshotStore) NodeInfos() schedulerinterface.NodeInfoListe
 // StorageInfos exposes snapshot as StorageInfoLister.
 func (snapshot *BasicSnapshotStore) StorageInfos() schedulerinterface.StorageInfoLister {
 	return (*basicSnapshotStoreStorageLister)(snapshot)
+}
+
+// PodGroupStates exposes snapshot as PodGroupStateLister.
+func (snapshot *BasicSnapshotStore) PodGroupStates() schedulerinterface.PodGroupStateLister {
+	return (*basicSnapshotStorePodGroupStateLister)(snapshot)
 }
 
 // List returns the list of nodes in the snapshot.
@@ -307,4 +307,12 @@ func (snapshot *basicSnapshotStoreNodeLister) Get(nodeName string) (schedulerint
 // Returns the IsPVCUsedByPods in a given key.
 func (snapshot *basicSnapshotStoreStorageLister) IsPVCUsedByPods(key string) bool {
 	return (*BasicSnapshotStore)(snapshot).getInternalData().isPVCUsedByPods(key)
+}
+
+// Get returns pod group state by namespace and pod group name.
+//
+// This method is never supposed to be called in the cluster autoscaler simulations
+// as pod group states are not integrated with cluster autoscaler.
+func (snapshot *basicSnapshotStorePodGroupStateLister) Get(namespace string, podGroupName string) (schedulerinterface.PodGroupState, error) {
+	return nil, errorGettingPodGroupState
 }

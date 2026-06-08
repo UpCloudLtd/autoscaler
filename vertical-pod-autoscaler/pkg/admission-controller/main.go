@@ -38,6 +38,7 @@ import (
 	vpa_clientset "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/client/clientset/versioned"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target"
 	controllerfetcher "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/target/controller_fetcher"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/client"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/limitrange"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 	metrics_admission "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/admission"
@@ -66,12 +67,18 @@ func main() {
 
 	kubeConfig := common.CreateKubeConfigOrDie(config.CommonFlags.KubeConfig, float32(config.CommonFlags.KubeApiQps), int(config.CommonFlags.KubeApiBurst))
 
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
 	vpaClient := vpa_clientset.NewForConfigOrDie(kubeConfig)
 	vpaLister := vpa_api_util.NewVpasLister(vpaClient, make(chan struct{}), config.CommonFlags.VpaObjectNamespace)
 	kubeClient := kube_client.NewForConfigOrDie(kubeConfig)
-	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod, informers.WithNamespace(config.CommonFlags.VpaObjectNamespace))
-	targetSelectorFetcher := target.NewVpaTargetSelectorFetcher(kubeConfig, kubeClient, factory)
-	controllerFetcher := controllerfetcher.NewControllerFetcher(kubeConfig, kubeClient, factory, scaleCacheEntryFreshnessTime, scaleCacheEntryLifetime, scaleCacheEntryJitterFactor)
+	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod,
+		informers.WithNamespace(config.CommonFlags.VpaObjectNamespace),
+		informers.WithTransform(client.StripManagedFields),
+	)
+	targetSelectorFetcher := target.NewVpaTargetSelectorFetcher(kubeConfig, kubeClient, factory, stopCh)
+	controllerFetcher := controllerfetcher.NewControllerFetcher(kubeConfig, kubeClient, factory, scaleCacheEntryFreshnessTime, scaleCacheEntryLifetime, scaleCacheEntryJitterFactor, stopCh)
 
 	podPreprocessor := pod.NewDefaultPreProcessor()
 	vpaPreprocessor := vpa.NewDefaultPreProcessor()
@@ -84,8 +91,6 @@ func main() {
 	recommendationProvider := recommendation.NewProvider(limitRangeCalculator, vpa_api_util.NewCappingRecommendationProcessor(limitRangeCalculator))
 	vpaMatcher := vpa.NewMatcher(vpaLister, targetSelectorFetcher, controllerFetcher)
 
-	stopCh := make(chan struct{})
-	defer close(stopCh)
 	factory.Start(stopCh)
 	informerMap := factory.WaitForCacheSync(stopCh)
 	for kind, synced := range informerMap {

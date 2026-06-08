@@ -17,9 +17,10 @@ limitations under the License.
 package integration
 
 import (
+	"time"
+
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
-	"time"
 )
 
 // DefaultAutoscalingOptions provides the baseline configuration for all tests.
@@ -46,6 +47,7 @@ var DefaultAutoscalingOptions = config.AutoscalingOptions{
 	FrequentLoopsEnabled:       true,
 	ClusterName:                "cluster-test",
 	MaxBinpackingTime:          10 * time.Second,
+	PredicateParallelism:       1,
 }
 
 // TestConfig is the "blueprint" for a test. It defines the entire
