@@ -5,6 +5,19 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- synced `feat/cluster-autoscaler-cloudprovider-upcloud` with upstream `master` branch (CA 1.36.0, k8s deps v1.36.1)
+  - registered the provider via `init()` in `upcloud_cloud_provider.go` and removed the obsolete `builder_upcloud.go`, matching the new upstream registration model (`RegisterCloudProvider`/`SetDefaultCloudProvider`)
+- bumped vendored UpCloud Go SDK to `v8.37.0`
+
+### Fixed
+
+- made node group scale-up non-blocking: `scaleNodeGroup` no longer polls the node group to `running` state, which blocked the main autoscaler loop for minutes on every scale-up; the target size is updated immediately and CA tracks upcoming nodes itself
+- added retry with exponential backoff around UpCloud API calls (node group list/details and modify), as the UpCloud Go SDK has no built-in retry; retries cover request timeouts and `429`/`5xx` responses
+- made node group cache refresh atomic: a transient API timeout no longer wipes the cache (which previously left the node group `unhealthy` with lost readiness tracking)
+- added RBAC for `volumeattachments` (`storage.k8s.io`) and `resourceclaims`/`resourceslices`/`deviceclasses` (`resource.k8s.io`, DRA) required by the newer scheduler framework
+
 ## [1.2.0]
 
 ### Added
