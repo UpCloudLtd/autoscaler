@@ -110,24 +110,21 @@ func (u *upCloudNodeGroup) DecreaseTargetSize(delta int) error {
 func (u *upCloudNodeGroup) scaleNodeGroup(size int) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutModifyNodeGroup)
-	defer cancel()
 	klog.V(logInfo).Infof("scaling node group %s from %d to %d", u.Id(), u.size, size)
-	_, err := u.svc.ModifyKubernetesNodeGroup(ctx, &request.ModifyKubernetesNodeGroupRequest{
-		ClusterUUID: u.clusterID.String(),
-		Name:        u.name,
-		NodeGroup: request.ModifyKubernetesNodeGroup{
-			Count: size,
-		},
+	err := withRetry(context.Background(), timeoutModifyNodeGroup, func(ctx context.Context) error {
+		_, e := u.svc.ModifyKubernetesNodeGroup(ctx, &request.ModifyKubernetesNodeGroupRequest{
+			ClusterUUID: u.clusterID.String(),
+			Name:        u.name,
+			NodeGroup: request.ModifyKubernetesNodeGroup{
+				Count: size,
+			},
+		})
+		return e
 	})
 	if err != nil {
 		return fmt.Errorf("failed to scale node group %s, %w", u.name, err)
 	}
-	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
-	if err != nil {
-		return err
-	}
-	u.size = nodeGroup.Count
+	u.size = size
 	return nil
 }
 

@@ -23,15 +23,76 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/client"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/request"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/klog/v2"
 )
+
+const retryMaxAttempts = 4
+
+// retryBaseBackoff is the initial delay between retries and doubles each
+// attempt. Declared as a var so tests can shrink it.
+var retryBaseBackoff = time.Millisecond * 500
+
+// retryableError reports whether err is worth retrying. Transient transport
+// failures, request timeouts and 429/5xx responses are retried; deterministic
+// client errors (4xx other than 429) and cancellations are not.
+func retryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var p *upcloud.Problem
+	if errors.As(err, &p) {
+		return p.Status == http.StatusTooManyRequests || p.Status >= http.StatusInternalServerError
+	}
+	var ce *client.Error
+	if errors.As(err, &ce) {
+		return ce.ErrorCode == http.StatusTooManyRequests || ce.ErrorCode >= http.StatusInternalServerError
+	}
+	// No HTTP status attached (network/transport error) - treat as transient.
+	return true
+}
+
+// withRetry runs fn with a fresh per-attempt timeout, retrying transient
+// failures with exponential backoff. The UpCloud SDK has no built-in retry,
+// so retries are handled here (see also Hetzner's hcloud.ExponentialBackoff
+// and Kamatera's request retry loop).
+func withRetry(ctx context.Context, timeout time.Duration, fn func(context.Context) error) error {
+	var err error
+	backoff := retryBaseBackoff
+	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		err = fn(attemptCtx)
+		cancel()
+		if err == nil || !retryableError(err) {
+			return err
+		}
+		if attempt == retryMaxAttempts {
+			break
+		}
+		klog.V(logInfo).Infof("UpCloud API call failed (attempt %d/%d), retrying in %s: %v", attempt, retryMaxAttempts, backoff, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return err
+}
 
 type upCloudService interface {
 	GetKubernetesCluster(ctx context.Context, r *request.GetKubernetesClusterRequest) (*upcloud.KubernetesCluster, error)
@@ -58,11 +119,14 @@ type manager struct {
 func (m *manager) refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-	defer cancel()
 	groups := make([]*upCloudNodeGroup, 0)
-	upcloudNodeGroups, err := m.svc.GetKubernetesNodeGroups(ctx, &request.GetKubernetesNodeGroupsRequest{
-		ClusterUUID: m.clusterID.String(),
+	var upcloudNodeGroups []upcloud.KubernetesNodeGroup
+	err := withRetry(context.Background(), timeoutGetRequest, func(ctx context.Context) error {
+		var e error
+		upcloudNodeGroups, e = m.svc.GetKubernetesNodeGroups(ctx, &request.GetKubernetesNodeGroupsRequest{
+			ClusterUUID: m.clusterID.String(),
+		})
+		return e
 	})
 	if err != nil {
 		return err
@@ -70,8 +134,7 @@ func (m *manager) refresh() error {
 	for _, g := range upcloudNodeGroups {
 		nodes, err := nodeGroupNodes(m.svc, m.clusterID, g.Name)
 		if err != nil {
-			klog.ErrorS(err, "failed to get node group nodes")
-			continue
+			return fmt.Errorf("failed to get nodes for node group %s, %w", g.Name, err)
 		}
 		group := upCloudNodeGroup{
 			clusterID: m.clusterID,
@@ -184,13 +247,16 @@ func clusterPlanByName(ctx context.Context, svc upCloudService, name string) (up
 }
 
 func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]cloudprovider.Instance, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-	defer cancel()
 	instances := make([]cloudprovider.Instance, 0)
 	klog.V(logInfo).Infof("fetching node group %s/%s details", clusterID.String(), name)
-	ng, err := svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
-		ClusterUUID: clusterID.String(),
-		Name:        name,
+	var ng *upcloud.KubernetesNodeGroupDetails
+	err := withRetry(context.Background(), timeoutGetRequest, func(ctx context.Context) error {
+		var e error
+		ng, e = svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
+			ClusterUUID: clusterID.String(),
+			Name:        name,
+		})
+		return e
 	})
 	if err != nil {
 		return instances, err
@@ -202,7 +268,7 @@ func nodeGroupNodes(svc upCloudService, clusterID uuid.UUID, name string) ([]clo
 			Status: nodeStateToInstanceStatus(node.State),
 		})
 	}
-	return instances, err
+	return instances, nil
 }
 
 func nodeStateToInstanceStatus(nodeState upcloud.KubernetesNodeState) *cloudprovider.InstanceStatus {
