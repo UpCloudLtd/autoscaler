@@ -17,9 +17,11 @@ limitations under the License.
 package integration
 
 import (
+	"time"
+
 	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
-	"time"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 )
 
 // DefaultAutoscalingOptions provides the baseline configuration for all tests.
@@ -30,22 +32,27 @@ var DefaultAutoscalingOptions = config.AutoscalingOptions{
 		ScaleDownUtilizationThreshold: 0.5,
 		MaxNodeProvisionTime:          10 * time.Second,
 	},
+	MaxTotalUnreadyPercentage:  1,
+	OkTotalUnreadyCount:        100000,
 	EstimatorName:              estimator.BinpackingEstimatorName,
 	EnforceNodeGroupMinSize:    true,
 	ScaleDownSimulationTimeout: 24 * time.Hour,
 	ScaleDownDelayAfterAdd:     0,
 	ScaleDownDelayAfterDelete:  0,
 	ScaleDownDelayAfterFailure: 0,
+	MaxScaleDownParallelism:    10,
+	MaxDrainParallelism:        1,
 	ScaleDownDelayTypeLocal:    true,
 	ScaleDownEnabled:           true,
-	MaxNodesTotal:              10,
-	MaxCoresTotal:              10,
-	MaxMemoryTotal:             100000,
+	MaxNodesTotal:              10000,
+	MaxCoresTotal:              100000,             // WARN: This setting isn't actually used by the fake CloudProvider.GetResourceLimiter(), there's a separate config there.
+	MaxMemoryTotal:             100000 * units.GiB, // WARN: This setting isn't actually used by the fake CloudProvider.GetResourceLimiter(), there's a separate config there.
 	ExpanderNames:              "least-waste",
 	ScaleUpFromZero:            true,
 	FrequentLoopsEnabled:       true,
 	ClusterName:                "cluster-test",
 	MaxBinpackingTime:          10 * time.Second,
+	PredicateParallelism:       1,
 }
 
 // TestConfig is the "blueprint" for a test. It defines the entire

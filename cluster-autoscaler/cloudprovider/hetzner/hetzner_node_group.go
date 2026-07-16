@@ -51,6 +51,7 @@ type hetznerNodeGroup struct {
 	clusterUpdateMutex *sync.Mutex
 	placementGroup     *hcloud.PlacementGroup
 	subnetIPRange      *net.IPNet
+	firewalls          []*hcloud.ServerCreateFirewall
 }
 
 type hetznerNodeGroupSpec struct {
@@ -305,7 +306,7 @@ func (n *hetznerNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 		}
 	}
 
-	nodeInfo := framework.NewNodeInfo(&node, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(n.id)})
+	nodeInfo := framework.NewNodeInfo(&node, nil, framework.NewPodInfo(cloudprovider.BuildKubeProxy(n.id), nil))
 	return nodeInfo, nil
 }
 
@@ -454,6 +455,27 @@ func instanceTypeArch(manager *hetznerManager, instanceType string) (string, err
 	}
 }
 
+// buildServerCreateFirewalls returns the firewalls to attach to a new server: the
+// cluster-wide firewall (HCLOUD_FIREWALL, if set) plus the nodepool's own
+// firewalls, deduplicated by id so a pool can harmlessly list the global one.
+// It is computed once at node-group build time and reused for every server.
+func buildServerCreateFirewalls(clusterFirewall *hcloud.Firewall, nodePoolFirewalls []*hcloud.Firewall) []*hcloud.ServerCreateFirewall {
+	var result []*hcloud.ServerCreateFirewall
+	seen := make(map[int64]bool)
+	add := func(firewall *hcloud.Firewall) {
+		if firewall == nil || seen[firewall.ID] {
+			return
+		}
+		seen[firewall.ID] = true
+		result = append(result, &hcloud.ServerCreateFirewall{Firewall: *firewall})
+	}
+	add(clusterFirewall)
+	for _, firewall := range nodePoolFirewalls {
+		add(firewall)
+	}
+	return result
+}
+
 func createServer(n *hetznerNodeGroup) error {
 	ctx, cancel := context.WithTimeout(n.manager.apiCallContext, n.manager.createTimeout)
 	defer cancel()
@@ -476,6 +498,13 @@ func createServer(n *hetznerNodeGroup) error {
 
 	// dont start the server if we need to attach the server to a private subnet network
 	StartAfterCreate := n.manager.network != nil && n.subnetIPRange == nil
+
+	serverLabels := make(map[string]string)
+	if n.manager.clusterConfig.IsUsingNewFormat {
+		maps.Copy(serverLabels, n.manager.clusterConfig.NodeConfigs[n.id].ServerLabels)
+	}
+	serverLabels[nodeGroupLabel] = n.id
+
 	opts := hcloud.ServerCreateOpts{
 		Name:             newNodeName(n),
 		UserData:         cloudInit,
@@ -483,9 +512,7 @@ func createServer(n *hetznerNodeGroup) error {
 		ServerType:       serverType,
 		Image:            image,
 		StartAfterCreate: &StartAfterCreate,
-		Labels: map[string]string{
-			nodeGroupLabel: n.id,
-		},
+		Labels:           serverLabels,
 		PublicNet: &hcloud.ServerCreatePublicNet{
 			EnableIPv4: n.manager.publicIPv4,
 			EnableIPv6: n.manager.publicIPv6,
@@ -498,10 +525,7 @@ func createServer(n *hetznerNodeGroup) error {
 	if n.manager.network != nil && n.subnetIPRange == nil {
 		opts.Networks = []*hcloud.Network{n.manager.network}
 	}
-	if n.manager.firewall != nil {
-		serverCreateFirewall := &hcloud.ServerCreateFirewall{Firewall: *n.manager.firewall}
-		opts.Firewalls = []*hcloud.ServerCreateFirewall{serverCreateFirewall}
-	}
+	opts.Firewalls = n.firewalls
 
 	serverCreateResult, _, err := n.manager.client.Server.Create(ctx, opts)
 	if err != nil {
