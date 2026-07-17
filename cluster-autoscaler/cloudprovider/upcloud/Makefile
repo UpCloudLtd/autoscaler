@@ -7,8 +7,8 @@ IMAGE_TAG ?= cluster-autoscaler-upcloud:dev
 build:
 	BUILD_TAGS=upcloud make -C ../../ build-in-docker
 
-image: build
-	docker build -t $(IMAGE_TAG) -f ../../Dockerfile.amd64 ../../
+image:
+	BUILD_TAGS=upcloud docker build -t $(IMAGE_TAG) -f ../../Dockerfile ../../
 
 vendor:
 	sh vendor.sh $(UPCLOUD_SDK_PACKAGE) $(UPCLOUD_SDK_VERSION) 

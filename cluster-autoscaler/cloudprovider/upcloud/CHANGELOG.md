@@ -5,6 +5,11 @@ See updating [Changelog example here](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- synced `feat/cluster-autoscaler-cloudprovider-upcloud` with `master` branch (`ff19d41`)
+- adopt new cloud provider builder pattern
+
 ## [1.2.0]
 
 ### Added
