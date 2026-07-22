@@ -51,10 +51,10 @@ import (
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/rancher"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/scaleway"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/tencentcloud"
+	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/utho"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/volcengine"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/vultr"
-	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud"
 )
 
 import (
