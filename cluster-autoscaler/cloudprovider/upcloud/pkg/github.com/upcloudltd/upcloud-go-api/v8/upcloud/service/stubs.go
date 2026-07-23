@@ -1,4 +1,3 @@
-
 package service
 
 type Cloud interface{}
@@ -21,4 +20,3 @@ type Gateway interface{}
 type Partner interface{}
 type AuditLog interface{}
 type FileStorage interface{}
-
