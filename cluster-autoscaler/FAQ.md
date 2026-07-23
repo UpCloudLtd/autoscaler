@@ -42,6 +42,7 @@ this document:
   * [How can I enable/disable eviction for a specific DaemonSet](#how-can-i-enabledisable-eviction-for-a-specific-daemonset)
   * [How can I enable Cluster Autoscaler to scale up when Node's max volume count is exceeded (CSI migration enabled)?](#how-can-i-enable-cluster-autoscaler-to-scale-up-when-nodes-max-volume-count-is-exceeded-csi-migration-enabled)
   * [How can I use ProvisioningRequest to run batch workloads?](#how-can-i-use-provisioningrequest-to-run-batch-workloads)
+  * [How can I enable scale-up when a CSI driver uses node-specific CSIStorageCapacity objects?](#how-can-i-enable-scale-up-when-a-csi-driver-uses-node-specific-csistoragecapacity-objects)
 * [Internals](#internals)
   * [Are all of the mentioned heuristics and timings final?](#are-all-of-the-mentioned-heuristics-and-timings-final)
   * [How does scale-up work?](#how-does-scale-up-work)
@@ -578,8 +579,6 @@ For a detailed explanation of the ProvisioningRequest API, please refer to the
 2. __Feature Flag__: Enable ProvisioningRequest support by setting the following flag in your Cluster Autoscaler configuration:
 `--enable-provisioning-requests=true`.
 
-3. __Content Type__: Set [API content type flag](https://github.com/kubernetes/autoscaler/blob/522c6fcc06c8cf663175ba03549773cc66a02837/cluster-autoscaler/main.go#L114) to application/json in your Cluster Autoscaler configuration: `--kube-api-content-type application/json`.
-
 4. __RBAC permissions__: Ensure your cluster-autoscaler pod has the necessary permissions to interact with ProvisioningRequests and PodTemplates:
 
 ```
@@ -756,6 +755,18 @@ Autoscaler configuration:
 spend processing CheckCapacity ProvisioningRequests in a single iteration by
 setting the following flag in your Cluster Autoscaler configuration:
 `--check-capacity-provisioning-request-batch-timebox=<timebox>`. The default value is 10s.
+
+### How can I enable scale-up when a CSI driver uses node-specific CSIStorageCapacity objects?
+
+Some CSI drivers publish `CSIStorageCapacity` objects with node-specific topology keys (e.g.
+`kubernetes.io/hostname=<node-name>`). During scale-up simulation, Cluster Autoscaler creates a
+template node based on an existing node. Because no `CSIStorageCapacity` object exists for this
+template node, the scheduler's storage capacity check fails during simulation and scale-up is
+blocked (see [#9700](https://github.com/kubernetes/autoscaler/issues/9700)).
+
+For mitigating issues like this, Cluster Autoscaler adds the label `cluster-autoscaler.kubernetes.io/template-node=true`
+to template nodes. CSI storage vendors can use this label to create a dedicated `CSIStorageCapacity`
+object that matches template nodes, allowing the scale-up simulation to succeed.
 
 ****************
 
@@ -990,6 +1001,7 @@ The following startup parameters are supported for cluster autoscaler:
 | `bulk-mig-instances-listing-enabled` | Fetch GCE mig instances in bulk instead of per mig |  |
 | `bypassed-scheduler-names` | Names of schedulers to bypass. If set to non-empty value, CA will not wait for pods to reach a certain age before triggering a scale-up. |  |
 | `capacity-buffer-controller-enabled` | Whether to enable the default controller for capacity buffers or not |  |
+| `capacity-buffer-pod-dry-run-enabled` | Whether to use server dry run to build managed pod templates for capacity buffers. That ensures that the buffers' fake pods will more reliably resemble real pods by going through the pod defaulting, mutating and validating webhooks. No-op if --capacity-buffer-controller-enabled is false. Note: requires "create" permission on pods to call server dry run. No real pods will be created. | true |
 | `capacity-buffer-pod-injection-enabled` | Whether to enable pod list processor that processes ready capacity buffers and injects fake pods accordingly |  |
 | `capacity-quotas-enabled` | Whether to enable CapacityQuota CRD support. |  |
 | `check-capacity-batch-processing` | Whether to enable batch processing for check capacity requests. |  |
@@ -1134,8 +1146,6 @@ The following startup parameters are supported for cluster autoscaler:
 | `v` | number for the log level verbosity |  |
 | `vmodule` | comma-separated list of pattern=N settings for file-filtered logging (only works for text log format) |  |
 | `write-status-configmap` | Should CA write status information to a configmap | true |
-
-
 
 # Troubleshooting
 

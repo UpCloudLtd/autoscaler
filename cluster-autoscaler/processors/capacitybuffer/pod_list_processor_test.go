@@ -26,8 +26,8 @@ import (
 	apiv1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer"
 	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/client"
+	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/fakepods"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
-	"k8s.io/utils/ptr"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -191,15 +191,9 @@ func TestPodListProcessor(t *testing.T) {
 			fakeKubernetesClient := fakeclient.NewSimpleClientset(test.objectsInKubernetesClient...)
 			fakeBuffersClient := buffersfake.NewSimpleClientset(test.objectsInBuffersClient...)
 			fakeCapacityBuffersClient, _ := client.NewCapacityBufferClientFromClients(fakeBuffersClient, fakeKubernetesClient, nil, nil)
+			capacityBuffersRegistry := fakepods.NewRegistry(nil)
 
-			buffersMap := make(map[string]*apiv1.CapacityBuffer)
-			for _, obj := range test.objectsInBuffersClient {
-				if buffer, ok := obj.(*apiv1.CapacityBuffer); ok {
-					buffersMap[buffer.Name] = buffer
-				}
-			}
-
-			processor := NewCapacityBufferPodListProcessor(fakeCapacityBuffersClient, []string{testProvStrategyAllowed}, test.forceSafeToEvict)
+			processor := NewCapacityBufferPodListProcessor(fakeCapacityBuffersClient, []string{testProvStrategyAllowed}, capacityBuffersRegistry, test.forceSafeToEvict)
 			resUnschedulablePods, err := processor.Process(nil, test.unschedulablePods)
 			assert.Equal(t, err != nil, test.expectError)
 
@@ -213,20 +207,19 @@ func TestPodListProcessor(t *testing.T) {
 					assert.Equal(t, err == nil && safeToEvict, test.forceSafeToEvict)
 					fakePodsNames[pod.Name] = true
 
-					// Verify OwnerReference
-					assert.Len(t, pod.OwnerReferences, 1)
-					ownerName := pod.OwnerReferences[0].Name
-					originalBuffer, ok := buffersMap[ownerName]
-					assert.True(t, ok, "can't find original buffer for fake pod")
-
-					assert.Equal(t, metav1.OwnerReference{
-						Kind:       capacitybuffer.CapacityBufferKind,
-						APIVersion: capacitybuffer.CapacityBufferApiVersion,
-						Name:       originalBuffer.Name,
-						UID:        originalBuffer.UID,
-						Controller: ptr.To(true),
-					}, pod.OwnerReferences[0])
-					assert.Contains(t, pod.Name, originalBuffer.Name)
+					// Verify owner reference
+					cb := capacityBuffersRegistry.GetCapacityBuffer(pod.UID)
+					if assert.NotNil(t, cb) {
+						assert.Equal(t, []metav1.OwnerReference{
+							{
+								APIVersion: capacitybuffer.CapacityBufferApiVersion,
+								Kind:       capacitybuffer.CapacityBufferKind,
+								Name:       cb.Name,
+								UID:        cb.UID,
+								Controller: new(true),
+							},
+						}, pod.OwnerReferences)
+					}
 				}
 			}
 			assert.Equal(t, test.expectedUnschedFakePodsCount, numberOfFakePods)
@@ -243,6 +236,65 @@ func TestPodListProcessor(t *testing.T) {
 					}
 				}
 				assert.True(t, found, "Condition %s not found", expectedCondition.Type)
+			}
+		})
+	}
+}
+
+func TestCapacityBufferFakePodsRegistry(t *testing.T) {
+	tests := []struct {
+		name                      string
+		objectsInKubernetesClient []runtime.Object
+		objectsInBuffersClient    []runtime.Object
+		unschedulablePods         []*corev1.Pod
+		expectedUnschedPodsCount  int
+		expectedBuffersPodsNum    map[string]int
+	}{
+		{
+			name:                      "1 ready buffer and 1 not ready buffer",
+			objectsInKubernetesClient: []runtime.Object{getTestingPodTemplate("ref1", 1), getTestingPodTemplate("ref2", 1)},
+			objectsInBuffersClient: []runtime.Object{
+				getTestingBuffer("buffer1", "ref1", 2, 1, false, 1, testProvStrategyAllowed),
+				getTestingBuffer("buffer2", "ref2", 3, 1, true, 1, testProvStrategyAllowed),
+			},
+			unschedulablePods:        []*corev1.Pod{getTestingPod("Pod1"), getTestingPod("Pod2"), getTestingPod("Pod3")},
+			expectedUnschedPodsCount: 6,
+			expectedBuffersPodsNum:   map[string]int{"buffer2": 3},
+		},
+		{
+			name:                      "2 ready buffers",
+			objectsInKubernetesClient: []runtime.Object{getTestingPodTemplate("ref1", 1), getTestingPodTemplate("ref2", 1)},
+			objectsInBuffersClient: []runtime.Object{
+				getTestingBuffer("buffer1", "ref1", 2, 1, true, 1, testProvStrategyAllowed),
+				getTestingBuffer("buffer2", "ref2", 3, 1, true, 1, testProvStrategyAllowed),
+			},
+			unschedulablePods:        []*corev1.Pod{getTestingPod("Pod1"), getTestingPod("Pod2"), getTestingPod("Pod3")},
+			expectedUnschedPodsCount: 8,
+			expectedBuffersPodsNum:   map[string]int{"buffer1": 2, "buffer2": 3},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeKubernetesClient := fakeclient.NewSimpleClientset(test.objectsInKubernetesClient...)
+			fakeBuffersClient := buffersfake.NewSimpleClientset(test.objectsInBuffersClient...)
+			fakeCapacityBuffersClient, _ := client.NewCapacityBufferClientFromClients(fakeBuffersClient, fakeKubernetesClient, nil, nil)
+
+			registry := fakepods.NewRegistry(nil)
+			processor := NewCapacityBufferPodListProcessor(fakeCapacityBuffersClient, []string{testProvStrategyAllowed}, registry, false)
+			resUnschedulablePods, err := processor.Process(nil, test.unschedulablePods)
+			assert.Equal(t, nil, err)
+			assert.Equal(t, test.expectedUnschedPodsCount, len(resUnschedulablePods))
+			for _, pod := range resUnschedulablePods {
+				if IsFakeCapacityBuffersPod(pod) {
+					podBufferObj := registry.GetCapacityBuffer(pod.UID)
+					assert.NotNil(t, podBufferObj)
+					expectedPodsNum, found := test.expectedBuffersPodsNum[podBufferObj.Name]
+					assert.True(t, found)
+					test.expectedBuffersPodsNum[podBufferObj.Name] = expectedPodsNum - 1
+				}
+			}
+			for bufferName := range test.expectedBuffersPodsNum {
+				assert.Equal(t, 0, test.expectedBuffersPodsNum[bufferName])
 			}
 		})
 	}

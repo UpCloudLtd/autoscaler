@@ -78,8 +78,12 @@ type NodeConfig struct {
 	PlacementGroup string
 	Taints         []apiv1.Taint
 	Labels         map[string]string
+	ServerLabels   map[string]string
 	ImagesForArch  *ImageList
 	SubnetIPRange  string
+	// Firewalls are additional firewall ids or names attached to this nodepool's
+	// servers, on top of the cluster-wide HCLOUD_FIREWALL.
+	Firewalls []string
 }
 
 // LegacyConfig holds the configuration in the legacy format

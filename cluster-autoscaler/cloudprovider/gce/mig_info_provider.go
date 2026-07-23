@@ -19,7 +19,6 @@ package gce
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -55,8 +54,12 @@ type MigInfoProvider interface {
 	// For custom machines cpu and memory information is based on parsing
 	// machine name. For standard types it's retrieved from GCE API.
 	GetMigMachineType(migRef GceRef) (MachineType, error)
-	// Returns the pagination behavior of the listManagedInstances API method for a given MIG ref
+	// Returns the pagination behavior of the listManagedInstances Results API method for a given MIG ref
 	GetListManagedInstancesResults(migRef GceRef) (string, error)
+	// GetMigIsStable returns whether given MIG is stable. A stable state means that: none of the instances in the managed instance group is currently undergoing any type of change (for example, creation, restart, or deletion); no future changes are scheduled for instances in the managed instance group; and the managed instance group itself is not being modified.
+	GetMigIsStable(migRef GceRef) (bool, error)
+	// RefreshMigInfo updates the cached information for a specific MIG without rebuilding the full zone cache
+	RefreshMigInfo(migRef GceRef) error
 }
 
 type timeProvider interface {
@@ -110,6 +113,7 @@ func (c *cachingMigInfoProvider) GetMigInstances(migRef GceRef) ([]GceInstance, 
 		return instances, nil
 	}
 
+	// MIG is not in the cache.
 	err := c.fillMigInstances(migRef)
 	if err != nil {
 		return nil, err
@@ -133,16 +137,24 @@ func (c *cachingMigInfoProvider) GetMigForInstance(instanceRef GceRef) (Mig, err
 		return nil, nil
 	}
 
+	// Cache is cleared every loop.
+	// If it's not empty, it's been refreshed this loop, and we don't want to refresh it again.
+	if !c.cache.IsMigInstancesCacheEmpty(mig.GceRef()) {
+		c.cache.MarkInstanceMigUnknown(instanceRef)
+		return nil, nil
+	}
+
 	err = c.fillMigInstances(mig.GceRef())
 	if err != nil {
 		return nil, err
 	}
-
+	// Check in the cache again after it's been refilled
 	mig, found, err = c.getCachedMigForInstance(instanceRef)
 	if !found {
 		c.cache.MarkInstanceMigUnknown(instanceRef)
 	}
 	return mig, err
+
 }
 
 func (c *cachingMigInfoProvider) getCachedMigForInstance(instanceRef GceRef) (Mig, bool, error) {
@@ -340,19 +352,29 @@ func (c *cachingMigInfoProvider) GetMigTargetSize(migRef GceRef) (int64, error) 
 		return targetSize, nil
 	}
 
-	err := c.fillMigInfoCache()
+	var err error
+	if c.cache.IsMigTargetSizeCacheEmpty() {
+		// Cache is cold after Refresh() -- list all MIGs and populate the cache.
+		err = c.fillMigInfoCache()
+	}
+
 	targetSize, found = c.cache.GetMigTargetSize(migRef)
-	if err == nil && found {
+	if found && err == nil {
 		return targetSize, nil
 	}
 
-	// fallback to querying for single mig
-	targetSize, err = c.gceClient.FetchMigTargetSize(migRef)
+	// We get here in one of 3 cases:
+	//  * InvalidateMigTargetSize was called for this specific mig, so it's not found in cache
+	//  * fillMigInfoCache returned an error
+	//  * MIG not found
+	err = c.fillSingleMigInfo(migRef)
 	if err != nil {
-		c.migLister.HandleMigIssue(migRef, err)
 		return 0, err
 	}
-	c.cache.SetMigTargetSize(migRef, targetSize)
+	targetSize, found = c.cache.GetMigTargetSize(migRef)
+	if !found {
+		return 0, fmt.Errorf("target size for %v not found in cache after refresh", migRef)
+	}
 	return targetSize, nil
 }
 
@@ -371,13 +393,14 @@ func (c *cachingMigInfoProvider) GetMigBasename(migRef GceRef) (string, error) {
 		return basename, nil
 	}
 
-	// fallback to querying for single mig
-	basename, err = c.gceClient.FetchMigBasename(migRef)
+	err = c.fillSingleMigInfo(migRef)
 	if err != nil {
-		c.migLister.HandleMigIssue(migRef, err)
 		return "", err
 	}
-	c.cache.SetMigBasename(migRef, basename)
+	basename, found = c.cache.GetMigBasename(migRef)
+	if !found {
+		return "", fmt.Errorf("basename for %v not found in cache after refresh", migRef)
+	}
 	return basename, nil
 }
 
@@ -396,13 +419,14 @@ func (c *cachingMigInfoProvider) GetMigInstanceTemplateName(migRef GceRef) (Inst
 		return instanceTemplateName, nil
 	}
 
-	// fallback to querying for single mig
-	instanceTemplateName, err = c.gceClient.FetchMigTemplateName(migRef)
+	err = c.fillSingleMigInfo(migRef)
 	if err != nil {
-		c.migLister.HandleMigIssue(migRef, err)
 		return InstanceTemplateName{}, err
 	}
-	c.cache.SetMigInstanceTemplateName(migRef, instanceTemplateName)
+	instanceTemplateName, found = c.cache.GetMigInstanceTemplateName(migRef)
+	if !found {
+		return InstanceTemplateName{}, fmt.Errorf("instance template name for %v not found in cache after refresh", migRef)
+	}
 	return instanceTemplateName, nil
 }
 
@@ -505,27 +529,70 @@ func (c *cachingMigInfoProvider) fillMigInfoCache() error {
 			}
 
 			if registeredMigRefs[zoneMigRef] {
-				targetSize := zoneMig.TargetSize + zoneMig.TargetSuspendedSize
-				c.cache.SetMigTargetSize(zoneMigRef, targetSize)
-				c.cache.SetMigBasename(zoneMigRef, zoneMig.BaseInstanceName)
-				c.cache.SetListManagedInstancesResults(zoneMigRef, zoneMig.ListManagedInstancesResults)
-				c.cache.SetMigInstancesStateCount(zoneMigRef, createInstancesStateCount(targetSize, zoneMig.CurrentActions))
-
-				templateUrl, err := url.Parse(zoneMig.InstanceTemplate)
-				if err == nil {
-					_, templateName := path.Split(templateUrl.EscapedPath())
-					regional, err := IsInstanceTemplateRegional(templateUrl.String())
-					if err != nil {
-						klog.Errorf("Error parsing instance template url: %v; err=%v ", templateUrl.String(), err)
-					} else {
-						c.cache.SetMigInstanceTemplateName(zoneMigRef, InstanceTemplateName{templateName, regional})
-					}
-				}
+				c.setMigInfoCache(zoneMigRef, zoneMig)
 			}
 		}
 	}
 
 	return nil
+}
+
+// RefreshMigInfo updates the cached information for a specific MIG without rebuilding the full zone cache
+func (c *cachingMigInfoProvider) RefreshMigInfo(migRef GceRef) error {
+	return c.fillSingleMigInfo(migRef)
+}
+
+func (c *cachingMigInfoProvider) fillSingleMigInfo(migRef GceRef) error {
+	igm, err := c.gceClient.FetchMig(migRef)
+	if err != nil {
+		c.migLister.HandleMigIssue(migRef, err)
+		return err
+	}
+	c.setMigInfoCache(migRef, igm)
+	return nil
+}
+
+func (c *cachingMigInfoProvider) setMigInfoCache(migRef GceRef, mig *gce.InstanceGroupManager) {
+	c.cache.SetMigTargetSize(migRef, mig.TargetSize+mig.TargetSuspendedSize)
+	c.cache.SetMigBasename(migRef, mig.BaseInstanceName)
+	if mig.Status != nil {
+		c.cache.SetMigIsStable(migRef, mig.Status.IsStable)
+	} else {
+		klog.Warningf("MIG %v has nil status, assuming isStable=false", migRef)
+		c.cache.SetMigIsStable(migRef, false)
+	}
+	c.cache.SetListManagedInstancesResults(migRef, mig.ListManagedInstancesResults)
+	c.cache.SetMigInstancesStateCount(migRef, createInstancesStateCount(mig.TargetSize, mig.CurrentActions))
+
+	_, templateName := path.Split(mig.InstanceTemplate)
+	regional := IsInstanceTemplateRegional(mig.InstanceTemplate)
+	c.cache.SetMigInstanceTemplateName(migRef, InstanceTemplateName{templateName, regional})
+}
+
+func (c *cachingMigInfoProvider) GetMigIsStable(migRef GceRef) (bool, error) {
+	c.migInfoMutex.Lock()
+	defer c.migInfoMutex.Unlock()
+
+	isStable, found := c.cache.GetMigIsStable(migRef)
+	if found {
+		return isStable, nil
+	}
+
+	err := c.fillMigInfoCache()
+	isStable, found = c.cache.GetMigIsStable(migRef)
+	if err == nil && found {
+		return isStable, nil
+	}
+
+	err = c.fillSingleMigInfo(migRef)
+	if err != nil {
+		return false, err
+	}
+	isStable, found = c.cache.GetMigIsStable(migRef)
+	if !found {
+		return false, fmt.Errorf("isStable for %v not found in cache after refresh", migRef)
+	}
+	return isStable, nil
 }
 
 // extractProjectWithRegex uses a regular expression to find and return the project name
@@ -599,13 +666,14 @@ func (c *cachingMigInfoProvider) GetListManagedInstancesResults(migRef GceRef) (
 		return listManagedInstancesResults, nil
 	}
 
-	// fallback to querying for a single mig
-	listManagedInstancesResults, err = c.gceClient.FetchListManagedInstancesResults(migRef)
+	err = c.fillSingleMigInfo(migRef)
 	if err != nil {
-		c.migLister.HandleMigIssue(migRef, err)
 		return "", err
 	}
-	c.cache.SetListManagedInstancesResults(migRef, listManagedInstancesResults)
+	listManagedInstancesResults, found = c.cache.GetListManagedInstancesResults(migRef)
+	if !found {
+		return "", fmt.Errorf("listManagedInstancesResults for %v not found in cache after refresh", migRef)
+	}
 	return listManagedInstancesResults, nil
 }
 

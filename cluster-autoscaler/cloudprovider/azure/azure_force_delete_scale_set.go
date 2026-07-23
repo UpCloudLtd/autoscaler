@@ -22,7 +22,7 @@ import (
 
 	azerrors "github.com/Azure/azure-sdk-for-go-extensions/pkg/errors"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v7"
 
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -96,4 +96,17 @@ func isOperationNotAllowed(err error) bool {
 		return azerr.ErrorCode == azerrors.OperationNotAllowed
 	}
 	return strings.Contains(err.Error(), azerrors.OperationNotAllowed)
+}
+
+const operationPreemptedErrorCode = "OperationPreempted"
+
+// isOperationPreempted checks if `error` is an OperationPreempted error.
+func isOperationPreempted(err error) bool {
+	if err == nil {
+		return false
+	}
+	if azerr := azerrors.IsResponseError(err); azerr != nil {
+		return azerr.ErrorCode == operationPreemptedErrorCode
+	}
+	return strings.Contains(err.Error(), operationPreemptedErrorCode)
 }
