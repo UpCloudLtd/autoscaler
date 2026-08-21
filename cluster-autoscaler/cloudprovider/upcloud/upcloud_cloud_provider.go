@@ -55,6 +55,7 @@ const (
 	envUpCloudPassword  string = "UPCLOUD_PASSWORD"
 	envUpCloudClusterID string = "UPCLOUD_CLUSTER_ID"
 
+	// ProviderName is the cloud provider name for this provider.
 	ProviderName = "upcloud"
 )
 
