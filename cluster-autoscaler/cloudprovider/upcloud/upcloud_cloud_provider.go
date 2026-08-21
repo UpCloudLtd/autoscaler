@@ -24,16 +24,16 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/client"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/upcloud/pkg/github.com/upcloudltd/upcloud-go-api/v8/upcloud/service"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
-	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/builder"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
+	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
 
 const (
@@ -54,6 +54,8 @@ const (
 	envUpCloudUsername  string = "UPCLOUD_USERNAME"
 	envUpCloudPassword  string = "UPCLOUD_PASSWORD"
 	envUpCloudClusterID string = "UPCLOUD_CLUSTER_ID"
+
+	ProviderName = "upcloud"
 )
 
 type upCloudConfig struct {
@@ -73,7 +75,7 @@ type upCloudCloudProvider struct {
 // Name returns name of the cloud provider.
 func (u *upCloudCloudProvider) Name() string {
 	klog.V(logDebug).Info("UpCloud CloudProvider.Name called")
-	return cloudprovider.UpCloudProviderName
+	return ProviderName
 }
 
 // NodeGroups returns all node groups configured for this cloud provider.
@@ -245,8 +247,8 @@ func cloudConfigFromEnv(opts config.AutoscalingOptions) (upCloudConfig, error) {
 }
 
 func init() {
-	builder.RegisterCloudProvider(cloudprovider.UpCloudProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
+	builder.RegisterCloudProvider(ProviderName, func(opts *coreoptions.AutoscalerOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter, informerFactory informers.SharedInformerFactory) cloudprovider.CloudProvider {
 		return BuildUpCloud(opts, do, rl)
 	})
-	builder.SetDefaultCloudProvider(cloudprovider.UpCloudProviderName)
+	builder.SetDefaultCloudProvider(ProviderName)
 }

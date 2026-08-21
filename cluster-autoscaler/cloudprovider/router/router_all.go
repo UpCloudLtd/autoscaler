@@ -43,7 +43,6 @@ import (
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/ionoscloud"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/kamatera"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/kubemark"
-	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/kwok"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/linode"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/magnum"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/instancepools"
@@ -55,11 +54,12 @@ import (
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/utho"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/volcengine"
 	_ "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/vultr"
+	_ "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/kwok"
 )
 
 import (
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/builder"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/builder"
 )
 
 func init() {
