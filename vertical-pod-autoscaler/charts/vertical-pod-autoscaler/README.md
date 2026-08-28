@@ -53,6 +53,8 @@ Important: You are responsible for creating the TLS secret before or after insta
 If the secret is created after the Helm install, you must restart the admission controller pod to trigger webhook registration.
 
 ### cert-manager managed
+
+Using an existing `Issuer` or `ClusterIssuer`:
 ```yaml
 admissionController:
   registerWebhook: false
@@ -60,6 +62,21 @@ admissionController:
     enabled: false
   certManager:
     enabled: true
+    issuerRef:
+      name: my-issuer
+      kind: ClusterIssuer
+```
+
+Or letting the chart create a namespaced self-signed issuer:
+```yaml
+admissionController:
+  registerWebhook: false
+  certGen:
+    enabled: false
+  certManager:
+    enabled: true
+    createSelfSignedIssuer:
+      enabled: true
 ```
 In this mode:
 - Helm creates the MutatingWebhookConfiguration
@@ -120,6 +137,7 @@ helm upgrade <release-name> <chart> \
 | admissionController.certGen.image.tag | string | `"v20231011-8b53cabe0"` | An image tag for the admissionController.certGen.image.repository image. |
 | admissionController.certGen.nodeSelector | object | `{}` |  |
 | admissionController.certGen.podSecurityContext | object | `{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}}` | The securityContext block for the certgen pod(s) |
+| admissionController.certGen.priorityClassName | string | `""` | Priority class name for the certgen job pods. These jobs gate the release as pre-install/pre-upgrade and post-install/post-upgrade hooks, so a priority class can help them schedule on a busy cluster. |
 | admissionController.certGen.resources | object | `{}` | The resources block for the certgen pod |
 | admissionController.certGen.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}` | The securityContext block for the certgen container(s) |
 | admissionController.certGen.tolerations | list | `[]` |  |
@@ -143,6 +161,7 @@ helm upgrade <release-name> <chart> \
 | admissionController.image.pullPolicy | string | `"IfNotPresent"` |  |
 | admissionController.image.repository | string | `"registry.k8s.io/autoscaling/vpa-admission-controller"` |  |
 | admissionController.image.tag | string | `nil` |  |
+| admissionController.logLevel | int | `4` | Log verbosity for the Admission Controller (klog -v). |
 | admissionController.mutatingWebhookConfiguration.annotations | object | `{}` | Additional annotations for the MutatingWebhookConfiguration |
 | admissionController.mutatingWebhookConfiguration.failurePolicy | string | `"Ignore"` | The failurePolicy for the mutating webhook. Allowed values are: Ignore, Fail |
 | admissionController.mutatingWebhookConfiguration.namespaceSelector | object | `{}` | The namespaceSelector controls which namespaces are affected by the webhook |
@@ -212,6 +231,7 @@ helm upgrade <release-name> <chart> \
 | recommender.leaderElection.resourceName | string | `"vpa-recommender-lease"` |  |
 | recommender.leaderElection.resourceNamespace | string | `""` |  |
 | recommender.leaderElection.retryPeriod | string | `"2s"` |  |
+| recommender.logLevel | int | `4` | Log verbosity for the Recommender (klog -v). |
 | recommender.nodeSelector | object | `{}` |  |
 | recommender.podAnnotations | object | `{}` |  |
 | recommender.podDisruptionBudget.enabled | bool | `true` |  |
@@ -243,6 +263,7 @@ helm upgrade <release-name> <chart> \
 | updater.leaderElection.resourceName | string | `"vpa-updater-lease"` |  |
 | updater.leaderElection.resourceNamespace | string | `""` |  |
 | updater.leaderElection.retryPeriod | string | `"2s"` |  |
+| updater.logLevel | int | `4` | Log verbosity for the Updater (klog -v). |
 | updater.nodeSelector | object | `{}` |  |
 | updater.podAnnotations | object | `{}` |  |
 | updater.podDisruptionBudget.enabled | bool | `true` |  |
