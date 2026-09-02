@@ -39,21 +39,21 @@ func TestUpCloudNodeGroup_MinSize(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{minSize: 1}
-	require.Equal(t, 1, g.MinSize())
+	require.Equal(t, 1, g.MinSize(t.Context()))
 }
 
 func TestUpCloudNodeGroup_MaxSize(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{maxSize: 1}
-	require.Equal(t, 1, g.MaxSize())
+	require.Equal(t, 1, g.MaxSize(t.Context()))
 }
 
 func TestUpCloudNodeGroup_TargetSize(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{size: 1}
-	size, err := g.TargetSize()
+	size, err := g.TargetSize(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, 1, size)
 }
@@ -63,8 +63,8 @@ func TestUpCloudNodeGroup_IncreaseSize(t *testing.T) {
 	clusterID := uuid.New()
 	svc := newMockService(clusterID)
 	g := &upCloudNodeGroup{size: 1, maxSize: 20, name: "group1", svc: svc, clusterID: clusterID}
-	require.NoError(t, g.IncreaseSize(1))
-	size, _ := g.TargetSize()
+	require.NoError(t, g.IncreaseSize(t.Context(), 1))
+	size, _ := g.TargetSize(t.Context())
 	require.Equal(t, 2, size)
 }
 
@@ -74,8 +74,8 @@ func TestUpCloudNodeGroup_DecreaseTargetSize(t *testing.T) {
 	clusterID := uuid.New()
 	svc := newMockService(clusterID)
 	g := &upCloudNodeGroup{size: 3, maxSize: 20, name: "group2", svc: svc, clusterID: clusterID}
-	require.NoError(t, g.DecreaseTargetSize(-1))
-	size, _ := g.TargetSize()
+	require.NoError(t, g.DecreaseTargetSize(t.Context(), -1))
+	size, _ := g.TargetSize(t.Context())
 	require.Equal(t, 2, size)
 }
 
@@ -86,12 +86,12 @@ func TestUpCloudNodeGroup_DeleteNodes(t *testing.T) {
 	svc := newMockService(clusterID)
 	kng := svc.Clusters[clusterID.String()].NodeGroups[0]
 	g := &upCloudNodeGroup{size: kng.Count, maxSize: 20, name: kng.Name, svc: svc, clusterID: clusterID}
-	size, _ := g.TargetSize()
+	size, _ := g.TargetSize(t.Context())
 	require.Equal(t, kng.Count, size)
-	require.NoError(t, g.DeleteNodes([]*v1.Node{
+	require.NoError(t, g.DeleteNodes(t.Context(), []*v1.Node{
 		{ObjectMeta: metav1.ObjectMeta{Name: "group1-node-1"}},
 	}))
-	size, _ = g.TargetSize()
+	size, _ = g.TargetSize(t.Context())
 	require.Equal(t, kng.Count-1, size)
 }
 
@@ -102,12 +102,12 @@ func TestUpCloudNodeGroup_ForceDeleteNodes(t *testing.T) {
 	svc := newMockService(clusterID)
 	kng := svc.Clusters[clusterID.String()].NodeGroups[0]
 	g := &upCloudNodeGroup{size: kng.Count, maxSize: 20, name: kng.Name, svc: svc, clusterID: clusterID}
-	size, _ := g.TargetSize()
+	size, _ := g.TargetSize(t.Context())
 	require.Equal(t, kng.Count, size)
-	require.NoError(t, g.ForceDeleteNodes([]*v1.Node{
+	require.NoError(t, g.ForceDeleteNodes(t.Context(), []*v1.Node{
 		{ObjectMeta: metav1.ObjectMeta{Name: "group1-node-1"}},
 	}))
-	size, _ = g.TargetSize()
+	size, _ = g.TargetSize(t.Context())
 	require.Equal(t, kng.Count-1, size)
 }
 
@@ -118,7 +118,7 @@ func TestUpCloudNodeGroup_Nodes(t *testing.T) {
 		Id: "test",
 	}}
 	g := &upCloudNodeGroup{nodes: wantNodes}
-	gotNodes, err := g.Nodes()
+	gotNodes, err := g.Nodes(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, wantNodes, gotNodes)
 }
@@ -127,14 +127,14 @@ func TestUpCloudNodeGroup_Autoprovisioned(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	require.False(t, g.Autoprovisioned())
+	require.False(t, g.Autoprovisioned(t.Context()))
 }
 
 func TestUpCloudNodeGroup_Create(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	_, err := g.Create()
+	_, err := g.Create(t.Context())
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
@@ -142,7 +142,7 @@ func TestUpCloudNodeGroup_Delete(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	err := g.Delete()
+	err := g.Delete(t.Context())
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
@@ -150,7 +150,7 @@ func TestUpCloudNodeGroup_GetOptions(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	_, err := g.GetOptions(config.NodeGroupAutoscalingOptions{})
+	_, err := g.GetOptions(t.Context(), config.NodeGroupAutoscalingOptions{})
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
@@ -158,21 +158,21 @@ func TestUpCloudNodeGroup_Debug(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{name: "test"}
-	require.NotEmpty(t, g.Debug())
+	require.NotEmpty(t, g.Debug(t.Context()))
 }
 
 func TestUpCloudNodeGroup_Exist(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{name: "test"}
-	require.True(t, g.Exist())
+	require.True(t, g.Exist(t.Context()))
 }
 
 func TestUpCloudNodeGroup_TemplateNodeInfo(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	_, err := g.TemplateNodeInfo()
+	_, err := g.TemplateNodeInfo(t.Context())
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
@@ -180,5 +180,5 @@ func TestUpCloudNodeGroup_AtomicIncreaseSize(t *testing.T) {
 	t.Parallel()
 
 	g := &upCloudNodeGroup{}
-	require.ErrorIs(t, g.AtomicIncreaseSize(1), cloudprovider.ErrNotImplemented)
+	require.ErrorIs(t, g.AtomicIncreaseSize(t.Context(), 1), cloudprovider.ErrNotImplemented)
 }

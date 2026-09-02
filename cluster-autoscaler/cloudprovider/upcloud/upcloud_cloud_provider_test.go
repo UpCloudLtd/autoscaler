@@ -36,12 +36,12 @@ func TestUpCloudCloudProvider_NodeGroups(t *testing.T) {
 	clusterID := uuid.New()
 	svc := newMockService(clusterID)
 	p := newUpCloudCloudProvider(clusterID, svc)
-	require.NoError(t, p.Refresh())
+	require.NoError(t, p.Refresh(t.Context()))
 	require.NoError(t, svc.AppendNodeGroup(context.TODO(), clusterID, upcloud.KubernetesNodeGroup{Count: 3, Name: "group3"}))
 	// node group length should still be 2 as refresh is not yet called
-	require.Len(t, p.NodeGroups(), 2)
-	require.NoError(t, p.Refresh())
-	require.Len(t, p.NodeGroups(), 3)
+	require.Len(t, p.NodeGroups(t.Context()), 2)
+	require.NoError(t, p.Refresh(t.Context()))
+	require.Len(t, p.NodeGroups(t.Context()), 3)
 }
 
 func TestUpCloudCloudProvider_Name(t *testing.T) {
@@ -57,9 +57,9 @@ func TestUpCloudCloudProvider_NodeGroupForNode(t *testing.T) {
 	clusterID := uuid.New()
 	svc := newMockService(clusterID)
 	p := newUpCloudCloudProvider(clusterID, svc)
-	require.NoError(t, p.Refresh())
+	require.NoError(t, p.Refresh(t.Context()))
 
-	group, err := p.NodeGroupForNode(&v1.Node{
+	group, err := p.NodeGroupForNode(t.Context(), &v1.Node{
 		Spec: v1.NodeSpec{
 			ProviderID: fmt.Sprintf("upcloud:////%s", "group1-1"),
 		},
@@ -69,7 +69,7 @@ func TestUpCloudCloudProvider_NodeGroupForNode(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("%s/group1", clusterID.String()), group.Id())
 
 	// nodes of other providers should return `nil` as group and error
-	group, err = p.NodeGroupForNode(&v1.Node{
+	group, err = p.NodeGroupForNode(t.Context(), &v1.Node{
 		Spec: v1.NodeSpec{
 			ProviderID: fmt.Sprintf("fake:////%s", "group1-1"),
 		},
@@ -88,7 +88,7 @@ func TestUpCloudCloudProvider_GetResourceLimiter(t *testing.T) {
 		},
 		resourceLimiter: rl,
 	}
-	l, err := p.GetResourceLimiter()
+	l, err := p.GetResourceLimiter(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, rl, l)
 }
@@ -152,28 +152,28 @@ func TestUpCloudCloudProvider_GPULabel(t *testing.T) {
 	t.Parallel()
 
 	p := upCloudCloudProvider{}
-	require.Empty(t, p.GPULabel())
+	require.Empty(t, p.GPULabel(t.Context()))
 }
 
 func TestUpCloudCloudProvider_GetAvailableGPUTypes(t *testing.T) {
 	t.Parallel()
 
 	p := upCloudCloudProvider{}
-	require.Nil(t, p.GetAvailableGPUTypes())
+	require.Nil(t, p.GetAvailableGPUTypes(t.Context()))
 }
 
 func TestUpCloudCloudProvider_Cleanup(t *testing.T) {
 	t.Parallel()
 
 	p := upCloudCloudProvider{}
-	require.Nil(t, p.Cleanup())
+	require.Nil(t, p.Cleanup(t.Context()))
 }
 
 func TestUpCloudCloudProvider_GetNodeGpuConfig(t *testing.T) {
 	t.Parallel()
 
 	p := upCloudCloudProvider{}
-	require.Nil(t, p.GetNodeGpuConfig(&v1.Node{
+	require.Nil(t, p.GetNodeGpuConfig(t.Context(), &v1.Node{
 		Spec: v1.NodeSpec{
 			ProviderID: fmt.Sprintf("upcloud:////%s", uuid.NewString()),
 		},
@@ -185,16 +185,16 @@ func TestUpCloudCloudProvider_ErrNotImplemented(t *testing.T) {
 
 	p := upCloudCloudProvider{}
 
-	_, err := p.HasInstance(nil)
+	_, err := p.HasInstance(t.Context(), nil)
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 
-	_, err = p.Pricing()
+	_, err = p.Pricing(t.Context())
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 
-	_, err = p.GetAvailableMachineTypes()
+	_, err = p.GetAvailableMachineTypes(t.Context())
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 
-	_, err = p.NewNodeGroup("", nil, nil, nil, nil)
+	_, err = p.NewNodeGroup(t.Context(), "", nil, nil, nil, nil)
 	require.ErrorIs(t, err, cloudprovider.ErrNotImplemented)
 }
 
