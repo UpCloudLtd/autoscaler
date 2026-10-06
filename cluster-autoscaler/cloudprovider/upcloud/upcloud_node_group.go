@@ -87,7 +87,7 @@ func (u *upCloudNodeGroup) IncreaseSize(ctx context.Context, delta int) error {
 	if size > u.MaxSize(ctx) {
 		return fmt.Errorf("failed to increase node group size, current=%d want=%d max=%d", u.size, size, u.MaxSize(ctx))
 	}
-	return u.scaleNodeGroup(size)
+	return u.scaleNodeGroup(ctx, size)
 }
 
 // DecreaseTargetSize decreases the target size of the node group. This function
@@ -104,16 +104,16 @@ func (u *upCloudNodeGroup) DecreaseTargetSize(ctx context.Context, delta int) er
 	if size < u.MinSize(ctx) {
 		return fmt.Errorf("failed to decrease node group size, current=%d want=%d min=%d", u.size, size, u.MinSize(ctx))
 	}
-	return u.scaleNodeGroup(size)
+	return u.scaleNodeGroup(ctx, size)
 }
 
-func (u *upCloudNodeGroup) scaleNodeGroup(size int) error {
+func (u *upCloudNodeGroup) scaleNodeGroup(ctx context.Context, size int) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutModifyNodeGroup)
+	svcCtx, cancel := context.WithTimeout(ctx, timeoutModifyNodeGroup)
 	defer cancel()
 	klog.V(logInfo).Infof("scaling node group %s from %d to %d", u.Id(), u.size, size)
-	_, err := u.svc.ModifyKubernetesNodeGroup(ctx, &request.ModifyKubernetesNodeGroupRequest{
+	_, err := u.svc.ModifyKubernetesNodeGroup(svcCtx, &request.ModifyKubernetesNodeGroupRequest{
 		ClusterUUID: u.clusterID.String(),
 		Name:        u.name,
 		NodeGroup: request.ModifyKubernetesNodeGroup{
@@ -123,7 +123,7 @@ func (u *upCloudNodeGroup) scaleNodeGroup(size int) error {
 	if err != nil {
 		return fmt.Errorf("failed to scale node group %s, %w", u.name, err)
 	}
-	nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
+	nodeGroup, err := u.waitNodeGroupState(ctx, upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
 	if err != nil {
 		return err
 	}
@@ -131,26 +131,33 @@ func (u *upCloudNodeGroup) scaleNodeGroup(size int) error {
 	return nil
 }
 
-func (u *upCloudNodeGroup) waitNodeGroupState(state upcloud.KubernetesNodeGroupState, timeout time.Duration) (*upcloud.KubernetesNodeGroupDetails, error) {
+func (u *upCloudNodeGroup) waitNodeGroupState(ctx context.Context, state upcloud.KubernetesNodeGroupState, timeout time.Duration) (*upcloud.KubernetesNodeGroupDetails, error) {
 	deadline := time.Now().Add(timeout)
 	i := 1
 	klog.V(logInfo).Infof("waiting node group %s state %s", u.Id(), state)
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeoutGetRequest)
-		defer cancel()
 
-		g, err := u.svc.GetKubernetesNodeGroup(ctx, &request.GetKubernetesNodeGroupRequest{
-			ClusterUUID: u.clusterID.String(),
-			Name:        u.name,
-		})
-		if err != nil {
-			return g, fmt.Errorf("failed to fetch node group %s, %w", u.Id(), err)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting node group %s state %s cancelled; %w", u.Id(), state, ctx.Err())
+		case <-ticker.C:
+			svcCtx, cancel := context.WithTimeout(ctx, timeoutGetRequest)
+			g, err := u.svc.GetKubernetesNodeGroup(svcCtx, &request.GetKubernetesNodeGroupRequest{
+				ClusterUUID: u.clusterID.String(),
+				Name:        u.name,
+			})
+			cancel()
+			if err != nil {
+				return g, fmt.Errorf("failed to fetch node group %s, %w", u.Id(), err)
+			}
+			if g.State == state {
+				return g, nil
+			}
+			klog.V(logInfo).Infof("waiting(%d) node group %s state %s (%s)", i, u.Id(), state, g.State)
 		}
-		if g.State == state {
-			return g, nil
-		}
-		klog.V(logInfo).Infof("waiting(%d) node group %s state %s (%s)", i, u.Id(), state, g.State)
-		time.Sleep(3 * time.Second)
 		i++
 	}
 	return nil, fmt.Errorf("node group %s state check (%d) timed out", u.Id(), i)
@@ -165,10 +172,10 @@ func (u *upCloudNodeGroup) DeleteNodes(ctx context.Context, nodes []*apiv1.Node)
 	defer u.mu.Unlock()
 
 	for i := range nodes {
-		if err := u.deleteNode(nodes[i].GetName()); err != nil {
+		if err := u.deleteNode(ctx, nodes[i].GetName()); err != nil {
 			return err
 		}
-		nodeGroup, err := u.waitNodeGroupState(upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
+		nodeGroup, err := u.waitNodeGroupState(ctx, upcloud.KubernetesNodeGroupStateRunning, timeoutWaitNodeGroupState)
 		if err != nil {
 			return err
 		}
@@ -185,8 +192,8 @@ func (u *upCloudNodeGroup) ForceDeleteNodes(ctx context.Context, nodes []*apiv1.
 	return u.DeleteNodes(ctx, nodes)
 }
 
-func (u *upCloudNodeGroup) deleteNode(nodeName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDeleteNode)
+func (u *upCloudNodeGroup) deleteNode(ctx context.Context, nodeName string) error {
+	ctx, cancel := context.WithTimeout(ctx, timeoutDeleteNode)
 	defer cancel()
 	klog.V(logInfo).Infof("deleting UpCloud %s/node %s", u.Id(), nodeName)
 	return u.svc.DeleteKubernetesNodeGroupNode(ctx, &request.DeleteKubernetesNodeGroupNodeRequest{

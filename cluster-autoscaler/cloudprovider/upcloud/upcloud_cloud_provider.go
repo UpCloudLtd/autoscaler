@@ -37,15 +37,13 @@ import (
 )
 
 const (
-	timeoutProviderInit         time.Duration = time.Second * 15
-	timeoutGetRequest           time.Duration = time.Second * 10
-	timeoutModifyNodeGroup      time.Duration = time.Second * 20
-	timeoutNodeGroupStateChange time.Duration = time.Minute * 20
-	timeoutDeleteNode           time.Duration = time.Second * 20
-	timeoutWaitNodeGroupState   time.Duration = time.Minute * 20
+	timeoutProviderInit       time.Duration = time.Second * 15
+	timeoutGetRequest         time.Duration = time.Second * 10
+	timeoutModifyNodeGroup    time.Duration = time.Second * 20
+	timeoutDeleteNode         time.Duration = time.Second * 20
+	timeoutWaitNodeGroupState time.Duration = time.Minute * 20
 
 	nodeGroupMinSize int = 1
-	nodeGroupMaxSize int = 20
 
 	logInfo  klog.Level = 4
 	logDebug klog.Level = 5
@@ -146,7 +144,7 @@ func (u *upCloudCloudProvider) GetNodeGpuConfig(ctx context.Context, node *apiv1
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (u *upCloudCloudProvider) Refresh(ctx context.Context) error {
 	klog.V(logDebug).Info("UpCloud CloudProvider.Refresh called")
-	return u.manager.refresh()
+	return u.manager.refresh(ctx)
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.
