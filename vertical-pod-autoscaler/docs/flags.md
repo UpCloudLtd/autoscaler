@@ -1,7 +1,7 @@
 # Vertical Pod Autoscaler Flags
 This document contains the flags for all VPA components.
 
-To view the most recent _release_ of flags for all VPA components, consult the release tag [flags(1.7.1)](https://github.com/kubernetes/autoscaler/blob/vertical-pod-autoscaler-1.7.1/vertical-pod-autoscaler/docs/flags.md) documentation.
+To view the most recent _release_ of flags for all VPA components, consult the release tag [flags(1.8.0)](https://github.com/kubernetes/autoscaler/blob/vertical-pod-autoscaler-1.8.0/vertical-pod-autoscaler/docs/flags.md) documentation.
 
 > **Note:** This document is auto-generated from the default branch (master) of the VPA repository.
 
@@ -69,6 +69,7 @@ This document is auto-generated from the flag definitions in the VPA recommender
 | `alsologtostderr` | bool | false | log to standard error as well as files (no effect when -logtostderr=true) |
 | `alsologtostderrthreshold` | severity |  | logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true) |
 | `checkpoints-gc-interval` | duration | 10m0s | How often orphaned checkpoints should be garbage collected |
+| `checkpoints-gc-timeout` | duration | 1m0s | Timeout for garbage collecting orphaned checkpoints |
 | `checkpoints-timeout` | duration | 1m0s | Timeout for writing checkpoints since the start of the recommender's main loop |
 | `confidence-interval-cpu` | duration | 24h0m0s | The time interval used for computing the confidence multiplier for the CPU lower and upper bound. Default: 24h |
 | `confidence-interval-memory` | duration | 24h0m0s | The time interval used for computing the confidence multiplier for the memory lower and upper bound. Default: 24h |

@@ -19,6 +19,7 @@ package vpa
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
@@ -126,8 +127,8 @@ func TestGetMatchingVpa(t *testing.T) {
 			name: "two vpas, one in off mode",
 			pod:  podBuilder.Get(),
 			vpas: []*vpa_types.VerticalPodAutoscaler{
-				vpaBuilder.WithUpdateMode(vpa_types.UpdateModeOff).WithName("off-vpa").WithTargetRef(targetRef).Get(),
-				vpaBuilder.WithUpdateMode(vpa_types.UpdateModeRecreate).WithName("recreate-vpa").WithTargetRef(targetRef).Get(),
+				vpaBuilder.WithUpdateMode(vpa_types.UpdateModeOff).WithName("off-vpa").WithCreationTimestamp(time.Now().Add(-time.Hour)).WithTargetRef(targetRef).Get(),
+				vpaBuilder.WithUpdateMode(vpa_types.UpdateModeRecreate).WithName("recreate-vpa").WithCreationTimestamp(time.Now()).WithTargetRef(targetRef).Get(),
 			},
 			labelSelector:   "app = test",
 			expectedFound:   true,
@@ -185,8 +186,7 @@ func TestGetMatchingVpa(t *testing.T) {
 
 			mockSelectorFetcher := target_mock.NewMockVpaTargetSelectorFetcher(ctrl)
 
-			vpaIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc,
-				cache.Indexers{vpa_api_util.TargetRefIndex: vpa_api_util.TargetRefIndexFunc})
+			vpaIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, vpa_api_util.VPAIndexers())
 			for _, vpa := range tc.vpas {
 				assert.NoError(t, vpaIndexer.Add(vpa))
 			}
